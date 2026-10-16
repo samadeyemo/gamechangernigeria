@@ -73,6 +73,16 @@ function gc_record_activity( $user_id, $activity_type, $content_id = 0, $source 
 	}
 
 	$table = gc_activity_table();
+	// Prevent fatal DB errors if the activity table is missing (e.g. failed install).
+	if ( function_exists( 'gc_activity_table_exists' ) && ! gc_activity_table_exists() ) {
+		if ( function_exists( 'gc_engagement_install' ) ) {
+			try { gc_engagement_install(); } catch ( Throwable $e ) { /* logged in install */ }
+		}
+		if ( function_exists( 'gc_activity_table_exists' ) && ! gc_activity_table_exists() ) {
+			$result['message'] = __( 'Engagement system is temporarily unavailable.', 'game-changers' );
+			return $result;
+		}
+	}
 	$today = gc_today();
 
 	// --- Duplicate-prevention rules -------------------------------------
@@ -104,21 +114,16 @@ function gc_record_activity( $user_id, $activity_type, $content_id = 0, $source 
 	$points = isset( $points_config[ $activity_type ]['points'] ) ? (int) $points_config[ $activity_type ]['points'] : 0;
 	if ( $content_id ) {
 		$override = get_post_meta( $content_id, 'gc_content_points', true );
-		if ( '' !== $override && is_numeric( $override ) ) {
+		// Only allow positive overrides — never force 0 on challenges/lessons
+		if ( '' !== $override && is_numeric( $override ) && (int) $override > 0 ) {
 			$points = (int) $override;
 		}
 	}
-
-	// Today's lesson + challenge together are worth 5 points total.
-	if ( in_array( $activity_type, array( 'daily_lesson', 'daily_challenge' ), true ) ) {
-		$already = (int) $wpdb->get_var( $wpdb->prepare(
-			"SELECT COALESCE(SUM(points_awarded),0) FROM {$table}
-			 WHERE user_id = %d AND activity_date = %s
-			 AND activity_type IN ('daily_lesson','daily_challenge')",
-			$user_id,
-			$today
-		) );
-		$points = min( $points, max( 0, 5 - $already ) );
+	// Daily challenge + lesson always award at least 5 points (Challenge bucket needs this)
+	if ( 'daily_challenge' === $activity_type || 'daily_lesson' === $activity_type ) {
+		if ( $points < 5 ) {
+			$points = 5;
+		}
 	}
 
 	// --- Write the ledger row (the single source of truth) ---------------
@@ -136,6 +141,10 @@ function gc_record_activity( $user_id, $activity_type, $content_id = 0, $source 
 	// --- Points total -------------------------------------------------------
 	$total_points = (int) get_user_meta( $user_id, 'gc_total_points', true ) + $points;
 	update_user_meta( $user_id, 'gc_total_points', $total_points );
+	if ( 'daily_challenge' === $activity_type && $points > 0 ) {
+		update_user_meta( $user_id, 'gc_challenge_points', (int) get_user_meta( $user_id, 'gc_challenge_points', true ) + $points );
+	}
+
 
 	// --- Streak (any qualifying activity counts, once per day) -----------
 	$streak_result = gc_update_streak_for_user( $user_id, $today );
@@ -245,6 +254,9 @@ function gc_update_missions_for_user( $user_id, $activity_type, $today ) {
  */
 function gc_check_badges_for_user( $user_id ) {
 	global $wpdb;
+	if ( function_exists( 'gc_activity_table_exists' ) && ! gc_activity_table_exists() ) {
+		return array();
+	}
 	$table   = gc_activity_table();
 	$badges  = get_option( 'gc_badges_config', array() );
 	$earned  = get_user_meta( $user_id, 'gc_badges', true );
@@ -279,6 +291,9 @@ function gc_check_badges_for_user( $user_id ) {
 				break;
 			case 'streak_days':
 				$met = $longest_streak >= (int) $badge['target'];
+				break;
+			case 'referral_count':
+				$met = (int) get_user_meta( $user_id, 'gc_referral_count', true ) >= (int) $badge['target'];
 				break;
 			case 'total_points':
 				$met = $total_points >= (int) $badge['target'];
@@ -315,6 +330,9 @@ function gc_check_badges_for_user( $user_id ) {
 /** Convenience read helpers for templates / Member Hub. */
 function gc_has_completed_today( $user_id, $activity_type ) {
 	global $wpdb;
+	if ( function_exists( 'gc_activity_table_exists' ) && ! gc_activity_table_exists() ) {
+		return false;
+	}
 	$table = gc_activity_table();
 	return (bool) $wpdb->get_var( $wpdb->prepare(
 		"SELECT COUNT(*) FROM {$table} WHERE user_id = %d AND activity_type = %s AND activity_date = %s",
@@ -341,6 +359,10 @@ function gc_member_progress( $user_id ) {
  */
 function gc_notifications_enabled() {
 	$settings = get_option( 'gc_engagement_settings', array() );
+	// Default ON so badge/welcome-related mails send unless admin turns off.
+	if ( ! is_array( $settings ) || ! array_key_exists( 'notifications_enabled', $settings ) ) {
+		return true;
+	}
 	return ! empty( $settings['notifications_enabled'] );
 }
 

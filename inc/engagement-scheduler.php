@@ -70,7 +70,7 @@ function gc_resolve_todays_content( $post_type, $option_key ) {
 	$active_ids = get_posts( array(
 		'post_type'      => $post_type,
 		'post_status'    => 'publish',
-		'posts_per_page' => -1,
+		'posts_per_page' => 500,
 		'fields'         => 'ids',
 		'meta_key'       => 'gc_content_day',
 		'orderby'        => 'meta_value_num',
@@ -118,7 +118,7 @@ function gc_expire_opportunities() {
 	$expired = get_posts( array(
 		'post_type'      => 'gc_opportunity',
 		'post_status'    => 'publish',
-		'posts_per_page' => -1,
+		'posts_per_page' => 200,
 		'fields'         => 'ids',
 		'meta_query'     => array(
 			array( 'key' => 'gc_opportunity_deadline', 'value' => $today, 'compare' => '<', 'type' => 'DATE' ),

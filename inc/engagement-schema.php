@@ -55,10 +55,38 @@ function gc_engagement_install() {
  */
 add_action( 'after_switch_theme', 'gc_engagement_install' );
 add_action( 'init', function() {
+	// Self-heal table only when version is missing/outdated.
+	// Guard with a short transient so concurrent requests don't stampede dbDelta.
 	if ( get_option( 'gc_engagement_db_version' ) !== GC_ENGAGEMENT_DB_VERSION ) {
-		gc_engagement_install();
+		if ( get_transient( 'gc_engagement_installing' ) ) {
+			return;
+		}
+		set_transient( 'gc_engagement_installing', 1, 60 );
+		try {
+			gc_engagement_install();
+		} catch ( Throwable $e ) {
+			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+				error_log( 'GC engagement install failed: ' . $e->getMessage() );
+			}
+		}
+		delete_transient( 'gc_engagement_installing' );
 	}
 }, 5 );
+
+/**
+ * Returns true when the activity log table exists (cached per-request).
+ */
+function gc_activity_table_exists() {
+	static $exists = null;
+	if ( null !== $exists ) {
+		return $exists;
+	}
+	global $wpdb;
+	$table = gc_activity_table();
+	$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
+	$exists = ( $found === $table );
+	return $exists;
+}
 
 /**
  * Seed the configurable Points / Badges / Levels / Missions tables from the
@@ -68,7 +96,7 @@ add_action( 'init', function() {
 function gc_seed_engagement_defaults() {
 	if ( false === get_option( 'gc_points_config', false ) ) {
 		update_option( 'gc_points_config', array(
-			'daily_challenge'        => array( 'label' => 'Daily Challenge',        'points' => 0,   'daily_cap' => 1 ),
+			'daily_challenge'        => array( 'label' => 'Daily Challenge',        'points' => 5,   'daily_cap' => 1 ),
 			'daily_lesson'           => array( 'label' => '5-Minute Lesson',        'points' => 5,   'daily_cap' => 1 ),
 			'course_lesson'          => array( 'label' => 'Course Lesson',          'points' => 10,  'daily_cap' => 0 ),
 			'community_contribution' => array( 'label' => 'Community Contribution','points' => 20,  'daily_cap' => 0 ),
@@ -333,3 +361,44 @@ function gc_apply_five_point_lesson_total() {
 	update_option( 'gc_points_five_v2', '1' );
 }
 add_action( 'init', 'gc_apply_five_point_lesson_total', 21 );
+
+
+/**
+ * Ensure 15 ordered badges (v1.5). Safe to run on existing installs.
+ */
+function gc_ensure_fifteen_badges() {
+	$ordered = array(
+		array( 'slug' => 'first-step',            'label' => 'First Step',              'type' => 'total_activities',            'target' => 1 ),
+		array( 'slug' => 'streak-7',               'label' => '7-Day Game Changer',       'type' => 'streak_days',                 'target' => 7 ),
+		array( 'slug' => 'streak-30',              'label' => '30-Day Game Changer',      'type' => 'streak_days',                 'target' => 30 ),
+		array( 'slug' => 'streak-90',              'label' => '90-Day Game Changer',      'type' => 'streak_days',                 'target' => 90 ),
+		array( 'slug' => 'streak-365',             'label' => '365-Day Game Changer',     'type' => 'streak_days',                 'target' => 365 ),
+		array( 'slug' => 'challenge-builder',      'label' => 'Challenge Builder',        'type' => 'count_daily_challenge',       'target' => 10 ),
+		array( 'slug' => 'challenge-master',       'label' => 'Challenge Master',         'type' => 'count_daily_challenge',       'target' => 50 ),
+		array( 'slug' => 'learning-starter',       'label' => 'Learning Starter',         'type' => 'count_daily_lesson',          'target' => 5 ),
+		array( 'slug' => 'learning-builder',       'label' => 'Learning Builder',         'type' => 'count_daily_lesson',          'target' => 25 ),
+		array( 'slug' => 'community-builder',      'label' => 'Community Builder',        'type' => 'count_community',             'target' => 5 ),
+		array( 'slug' => 'chapter-participant',    'label' => 'Chapter Participant',      'type' => 'count_chapter',               'target' => 3 ),
+		array( 'slug' => 'referral-starter',       'label' => 'Referral Starter',         'type' => 'referral_count',              'target' => 1 ),
+		array( 'slug' => 'network-builder',        'label' => 'Network Builder',          'type' => 'referral_count',              'target' => 5 ),
+		array( 'slug' => 'impact-builder',         'label' => 'Impact Builder',           'type' => 'total_points',                'target' => 500 ),
+		array( 'slug' => 'impact-leader',          'label' => 'Impact Leader',            'type' => 'total_points',                'target' => 5000 ),
+	);
+	$current = get_option( 'gc_badges_config', array() );
+	// Always keep exact order 1–15
+	$need = false;
+	if ( ! is_array( $current ) || count( $current ) !== 15 ) {
+		$need = true;
+	} else {
+		foreach ( $ordered as $i => $b ) {
+			if ( ( $current[ $i ]['slug'] ?? '' ) !== $b['slug'] ) {
+				$need = true;
+				break;
+			}
+		}
+	}
+	if ( $need ) {
+		update_option( 'gc_badges_config', $ordered, false );
+	}
+}
+add_action( 'init', 'gc_ensure_fifteen_badges', 25 );

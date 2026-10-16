@@ -172,3 +172,21 @@ function gc_get_featured_chapters( $limit = 3 ) {
 		'meta_query'     => array( array( 'key' => 'gc_chapter_featured', 'value' => '1', 'compare' => '=' ) ),
 	) );
 } function gc_get_all_chapters() { $posts = get_posts( array( 'post_type' => 'gc_chapter', 'posts_per_page' => -1, 'orderby' => 'title', 'order' => 'ASC', 'post_status' => 'publish', 'post_parent' => 0, ) ); $chapters = array(); foreach ( $posts as $post ) { $state = get_post_meta( $post->ID, 'gc_chapter_state', true ) ?: $post->post_title; $chapters[] = array( 'id' => $post->ID, 'state' => $state, 'capital' => get_post_meta( $post->ID, 'gc_chapter_capital', true ) ?: ( gc_ng_state_capitals()[ $state ] ?? '' ), 'title' => $post->post_title, 'permalink' => get_permalink( $post ), 'whatsapp' => get_post_meta( $post->ID, 'gc_whatsapp_link', true ), 'organiser' => get_post_meta( $post->ID, 'gc_chapter_organiser', true ), 'featured' => (bool) get_post_meta( $post->ID, 'gc_chapter_featured', true ), 'member_count' => gc_get_chapter_member_count( $post->ID ), 'local_groups' => count( gc_get_chapter_local_groups( $post->ID ) ), ); } return $chapters; } function gc_backfill_chapter_locations() { $map = gc_ng_state_capitals(); foreach ( get_posts(array('post_type'=>'gc_chapter','posts_per_page'=>-1,'post_status'=>'any')) as $chapter ) { $state = get_post_meta($chapter->ID,'gc_chapter_state',true) ?: $chapter->post_title; if ( isset($map[$state]) ) { update_post_meta($chapter->ID,'gc_chapter_state',$state); if ( ! get_post_meta($chapter->ID,'gc_chapter_capital',true) ) update_post_meta($chapter->ID,'gc_chapter_capital',$map[$state]); } } } add_action('admin_init','gc_backfill_chapter_locations'); add_action('admin_init', function(){ if (wp_count_posts('gc_chapter')->publish < count(gc_ng_states())) gc_seed_state_chapters(); }); add_filter('manage_gc_chapter_posts_columns',function($cols){$out=array();foreach($cols as $k=>$v){$out[$k]=$v;if($k==='title'){$out['gc_level']='Level';$out['gc_state']='State';$out['gc_capital']='Capital';$out['gc_organiser']='Organiser';$out['gc_members']='Members';$out['gc_pending']='Pending';$out['gc_featured']='Featured';}}return $out;}); add_action('manage_gc_chapter_posts_custom_column',function($col,$post_id){if($col==='gc_level')echo esc_html(gc_chapter_level_label($post_id));if($col==='gc_state')echo esc_html(gc_chapter_effective_state($post_id));if($col==='gc_capital')echo esc_html(get_post_meta($post_id,'gc_chapter_capital',true));if($col==='gc_organiser')echo esc_html(get_post_meta($post_id,'gc_chapter_organiser',true));if($col==='gc_members')echo (int) gc_get_chapter_member_count($post_id);if($col==='gc_pending'){$p=(int) gc_get_chapter_pending_count($post_id); echo $p ? '<strong style="color:#a02222;">'.$p.'</strong>' : '0';}if($col==='gc_featured')echo get_post_meta($post_id,'gc_chapter_featured',true)==='1' ? '★' : '—';},10,2); add_action('admin_menu',function(){add_submenu_page('edit.php?post_type=gc_chapter','Create a Chapter','+ Create Chapter','edit_posts','post-new.php?post_type=gc_chapter');}); 
+
+/** When a chapter is saved without state meta, use the title so Find Chapter works. */
+function gc_chapter_autofill_state( $post_id ) {
+	if ( get_post_type( $post_id ) !== 'gc_chapter' ) {
+		return;
+	}
+	if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+		return;
+	}
+	$state = get_post_meta( $post_id, 'gc_chapter_state', true );
+	if ( ! $state ) {
+		$title = get_the_title( $post_id );
+		if ( $title ) {
+			update_post_meta( $post_id, 'gc_chapter_state', $title );
+		}
+	}
+}
+add_action( 'save_post_gc_chapter', 'gc_chapter_autofill_state', 20 );

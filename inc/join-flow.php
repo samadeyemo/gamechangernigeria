@@ -56,11 +56,21 @@ function gc_user_membership_tier( $user_id = 0 ) {
 	if ( ! $user_id ) {
 		return 0;
 	}
-	if ( ! gc_user_is_premium( $user_id ) ) {
-		return 0;
+	// Administrators always operate at the highest configured tier.
+	if ( user_can( $user_id, 'administrator' ) && function_exists( 'gc_tiers' ) ) {
+		$keys = array_keys( gc_tiers() );
+		if ( $keys ) {
+			return (int) max( $keys );
+		}
 	}
 	$t = (int) get_user_meta( $user_id, 'gc_premium_tier', true );
-	return $t > 0 ? $t : 1;
+	if ( $t > 0 ) {
+		return $t;
+	}
+	if ( function_exists( 'gc_user_is_premium' ) && gc_user_is_premium( $user_id ) ) {
+		return 1;
+	}
+	return 0;
 }
 
 /**
@@ -84,6 +94,9 @@ function gc_migrate_user_to_premium( $user_id, $tier = 1, $payment_ref = '' ) {
 	update_user_meta( $user_id, 'gc_premium_since', current_time( 'mysql' ) );
 	if ( $payment_ref ) {
 		update_user_meta( $user_id, 'gc_last_payment_ref', $payment_ref );
+	}
+	if ( $payment_ref && function_exists( 'gc_wallet_credit_referral_on_payment' ) ) {
+		gc_wallet_credit_referral_on_payment( $user_id, $tier, $payment_ref, 0 );
 	}
 	if ( ! get_user_meta( $user_id, 'gc_premium_referral_tag', true ) ) {
 		$tag_fn = function_exists( 'gc_generate_premium_referral_tag' ) ? 'gc_generate_premium_referral_tag' : ( function_exists( 'gc_generate_membership_tag' ) ? 'gc_generate_membership_tag' : null );
@@ -291,34 +304,73 @@ function gc_user_by_referral_tag( $tag ) {
 function gc_award_referral_points( $referrer_id, $new_user_id, $tier = 1 ) {
 	$referrer_id = absint( $referrer_id );
 	$new_user_id = absint( $new_user_id );
+	$tier        = max( 1, absint( $tier ) );
 	if ( ! $referrer_id || ! $new_user_id || $referrer_id === $new_user_id ) {
 		return;
 	}
-	// Points scale lightly by tier joined
-	$points_map = array( 1 => 50, 2 => 100, 3 => 200, 4 => 400, 5 => 600 );
-	$points     = isset( $points_map[ (int) $tier ] ) ? $points_map[ (int) $tier ] : 50;
 
-	$current = (int) get_user_meta( $referrer_id, 'gc_total_points', true );
-	update_user_meta( $referrer_id, 'gc_total_points', $current + $points );
+	// Base = tier growth points (admin-configurable).
+	if ( function_exists( 'gc_get_tier_growth_points' ) ) {
+		$base = (int) gc_get_tier_growth_points( $tier );
+	} else {
+		$map  = array( 1 => 500, 2 => 2500, 3 => 7500, 4 => 25000, 5 => 75000 );
+		$base = isset( $map[ $tier ] ) ? (int) $map[ $tier ] : 500;
+	}
+	if ( $base < 1 ) {
+		return;
+	}
+
+	// Generation 1 (direct): 1/3 of tier points (floor).
+	$direct = (int) floor( $base / 3 );
+	if ( $direct > 0 ) {
+		$ref_pts = (int) get_user_meta( $referrer_id, 'gc_referral_points', true ) + $direct;
+		update_user_meta( $referrer_id, 'gc_referral_points', $ref_pts );
+		$total = (int) get_user_meta( $referrer_id, 'gc_total_points', true ) + $direct;
+		update_user_meta( $referrer_id, 'gc_total_points', $total );
+	}
 
 	$ref_count = (int) get_user_meta( $referrer_id, 'gc_referral_count', true );
 	update_user_meta( $referrer_id, 'gc_referral_count', $ref_count + 1 );
 
-	// Log on both users
 	update_user_meta( $new_user_id, 'gc_referred_by', $referrer_id );
-	$log = (array) get_user_meta( $referrer_id, 'gc_referral_log', true );
+	$log   = (array) get_user_meta( $referrer_id, 'gc_referral_log', true );
 	$log[] = array(
 		'user_id' => $new_user_id,
-		'tier'    => (int) $tier,
-		'points'  => $points,
+		'tier'    => $tier,
+		'points'  => $direct,
+		'gen'     => 1,
 		'time'    => current_time( 'mysql' ),
 	);
 	update_user_meta( $referrer_id, 'gc_referral_log', $log );
 
-	// Optional: feed engagement engine if available
+	// Generation 2 only: the person who referred $referrer_id gets 1/5.
+	// Generation 3+ gets nothing.
+	$upline = (int) get_user_meta( $referrer_id, 'gc_referred_by', true );
+	if ( $upline && $upline !== $referrer_id && $upline !== $new_user_id ) {
+		$indirect = (int) floor( $base / 5 );
+		if ( $indirect > 0 ) {
+			$l2 = (int) get_user_meta( $upline, 'gc_referral_l2_points', true ) + $indirect;
+			update_user_meta( $upline, 'gc_referral_l2_points', $l2 );
+			$ut = (int) get_user_meta( $upline, 'gc_total_points', true ) + $indirect;
+			update_user_meta( $upline, 'gc_total_points', $ut );
+			$ulog   = (array) get_user_meta( $upline, 'gc_referral_log', true );
+			$ulog[] = array(
+				'user_id' => $new_user_id,
+				'tier'    => $tier,
+				'points'  => $indirect,
+				'gen'     => 2,
+				'via'     => $referrer_id,
+				'time'    => current_time( 'mysql' ),
+			);
+			update_user_meta( $upline, 'gc_referral_log', $ulog );
+		}
+	}
+
 	if ( function_exists( 'gc_record_activity' ) ) {
-		// Use community_contribution as closest type if referral type not configured
 		gc_record_activity( $referrer_id, 'community_contribution', $new_user_id, 'referral_join' );
+	}
+	if ( function_exists( 'gc_maybe_auto_upgrade_by_invites' ) ) {
+		gc_maybe_auto_upgrade_by_invites( $referrer_id );
 	}
 }
 
@@ -378,13 +430,13 @@ function gc_verify_paystack_join() {
 	}
 
 	// Store a short-lived transient so onboard form can prove payment
-	set_transient( 'gc_paid_' . md5( $ref ), array(
+	gc_store_paid_unlock( $ref, array(
 		'ref'    => $ref,
 		'tier'   => $tier,
 		'amount' => $amount_naira,
 		'email'  => $email,
 		'time'   => time(),
-	), DAY_IN_SECONDS );
+	) );
 
 	// Already logged in (free or premium) → migrate/upgrade same account, same password
 	if ( is_user_logged_in() ) {
@@ -395,9 +447,6 @@ function gc_verify_paystack_join() {
 			gc_migrate_user_to_premium( $uid, $target, $ref );
 		} else {
 			update_user_meta( $uid, 'gc_last_payment_ref', $ref );
-	if ( function_exists( 'gc_save_payout_account' ) ) {
-		gc_save_payout_account( $email, $bank_name, $account_name, $account_number, $uid );
-	}
 		}
 		$dash = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard' ) : home_url( '/premium-dashboard/' );
 		wp_safe_redirect( add_query_arg( array( 'joined' => '1', 'upgraded' => '1' ), $dash ) );
@@ -445,7 +494,14 @@ function gc_handle_join_onboard() {
 	$account_number = sanitize_text_field( wp_unslash( $_POST['gc_account_number'] ?? '' ) );
 	$ref_tag_in = strtoupper( sanitize_text_field( wp_unslash( $_POST['gc_referral_code'] ?? '' ) ) );
 
-	$paid = $ref ? get_transient( 'gc_paid_' . md5( $ref ) ) : false;
+	$paid = $ref ? gc_get_paid_unlock( $ref ) : false;
+	if ( ( ! $paid || empty( $paid['ref'] ) ) && is_email( $email ) ) {
+		$by = get_option( 'gc_paid_email_' . md5( strtolower( $email ) ), false );
+		if ( is_array( $by ) && ! empty( $by['ref'] ) ) {
+			$paid = $by;
+			$ref  = (string) $by['ref'];
+		}
+	}
 	if ( ! $paid || empty( $paid['ref'] ) ) {
 		wp_safe_redirect( add_query_arg( 'gc_err', 'payment', gc_page_url( 'become-a-member' ) ) );
 		exit;
@@ -498,10 +554,21 @@ function gc_handle_join_onboard() {
 	if ( (int) $tier >= 3 && function_exists( 'gc_user_is_inner_circle' ) ) { gc_user_is_inner_circle( $uid ); }
 	update_user_meta( $uid, 'gc_premium_referral_tag', gc_generate_premium_referral_tag() );
 	update_user_meta( $uid, 'gc_last_payment_ref', $ref );
+	if ( $ref && function_exists( 'gc_wallet_credit_referral_on_payment' ) ) {
+		gc_wallet_credit_referral_on_payment( $uid, $tier, $ref, 0 );
+	}
 	update_user_meta( $uid, 'gc_phone', $phone );
 	update_user_meta( $uid, 'gc_state', $state );
 	update_user_meta( $uid, 'gc_joined_at', current_time( 'mysql' ) );
-	update_user_meta( $uid, 'gc_total_points', 25 ); // welcome points
+	// Welcome bonus on top of tier points (do not reset total to 25)
+	$welcome = 25;
+	$current_pts = (int) get_user_meta( $uid, 'gc_total_points', true );
+	update_user_meta( $uid, 'gc_total_points', $current_pts + $welcome );
+	if ( function_exists( 'gc_send_premium_welcome_email' ) ) {
+		gc_send_premium_welcome_email( $email, $name, $tier );
+	} elseif ( function_exists( 'gc_send_member_welcome_email' ) ) {
+		gc_send_member_welcome_email( $email, $name );
+	}
 
 	// Referral
 	if ( $ref_tag_in ) {
@@ -509,6 +576,9 @@ function gc_handle_join_onboard() {
 		if ( $referrer ) {
 			update_user_meta( $uid, 'gc_referrer_tag_raw', $ref_tag_in );
 			gc_award_referral_points( $referrer->ID, $uid, $tier );
+			if ( function_exists( 'gc_maybe_auto_upgrade_by_invites' ) ) {
+				gc_maybe_auto_upgrade_by_invites( $referrer->ID );
+			}
 		}
 	}
 
@@ -571,83 +641,84 @@ function gc_join_pay_link_for_tier( $tier ) {
 function gc_join_paystack_button( $tier, $amount, $email = '' ) {
 	$tier   = absint( $tier );
 	$amount = (int) $amount;
-	$shop   = gc_join_pay_link_for_tier( $tier );
-	$key    = get_option( 'gc_paystack_public_key', '' );
+	$key    = trim( (string) get_option( 'gc_paystack_public_key', '' ) );
 	ob_start();
 
-	// Always show something actionable
-	if ( $shop ) {
-		$sep = ( strpos( $shop, '?' ) !== false ) ? '&' : '?';
-		$url = $shop . $sep . 'tier=' . $tier;
+	if ( ! $key || 0 !== strpos( $key, 'pk_' ) ) {
 		?>
-		<a class="gc-button gc-button-gold gc-join-pay-btn" href="<?php echo esc_url( $url ); ?>" target="_blank" rel="noopener">
-			Pay ₦<?php echo esc_html( number_format_i18n( $amount ) ); ?> with Paystack
-		</a>
-		<p class="gc-join-hint" style="margin-top:10px;font-size:13px;color:#66756a;">After paying, return here and confirm with the email you used on Paystack, or upload your bank receipt.</p>
+		<div class="gc-join-err" style="margin-bottom:12px;">Paystack is not configured. Admin: add a live public key (pk_live_…) under <strong>Settings → GC Payments</strong>.</div>
 		<?php
+		return ob_get_clean();
+	}
+	if ( $amount < 100 ) {
+		?>
+		<div class="gc-join-err">Invalid amount.</div>
+		<?php
+		return ob_get_clean();
 	}
 
-	if ( $key && $amount ) {
-		$ref = 'GCN-T' . $tier . '-' . time() . '-' . wp_rand( 1000, 9999 );
-		$verify = add_query_arg(
-			array( 'action' => 'gc_paystack_verify', 'tier' => $tier ),
-			admin_url( 'admin-post.php' )
-		);
-		?>
-		<button type="button" class="gc-button <?php echo $shop ? 'gc-button-green' : 'gc-button-gold'; ?> gc-join-pay-btn"
-			data-gc-paystack="1"
-			data-amount="<?php echo esc_attr( $amount ); ?>"
-			data-ref="<?php echo esc_attr( $ref ); ?>"
-			data-tier="<?php echo esc_attr( $tier ); ?>"
-			data-email="<?php echo esc_attr( $email ); ?>"
-			data-verify="<?php echo esc_url( $verify ); ?>">
-			<?php echo $shop ? 'Or pay in-app (Paystack popup)' : 'Pay ₦' . esc_html( number_format_i18n( $amount ) ) . ' with Paystack'; ?>
-		</button>
-		<script src="https://js.paystack.co/v2/inline.js"></script>
-		<script>
-		(function(){
-			var key = <?php echo wp_json_encode( $key ); ?>;
-			document.querySelectorAll('.gc-join-pay-btn[data-gc-paystack]').forEach(function(b){
-				if (b.getAttribute('data-bound') === '1') return;
-				b.setAttribute('data-bound', '1');
-				b.addEventListener('click', function(){
-					if (!window.PaystackPop) { alert('Paystack is loading — try again in a moment.'); return; }
-					var amount = parseInt(b.getAttribute('data-amount'), 10) * 100;
-					var email = b.getAttribute('data-email') || prompt('Enter your email for payment receipt') || '';
-					if (!email || email.indexOf('@') < 0) { alert('A valid email is required to pay.'); return; }
-					var tier = parseInt(b.getAttribute('data-tier'), 10) || 1;
-					var ref = b.getAttribute('data-ref');
-					var verifyBase = b.getAttribute('data-verify');
-					var p = new PaystackPop();
-					p.newTransaction({
-						key: key,
-						email: email,
-						amount: amount,
-						ref: ref,
-						metadata: { tier: tier },
-						onSuccess: function(t){
-							location.href = verifyBase + '&reference=' + encodeURIComponent(t.reference || ref);
-						},
-						onCancel: function(){}
-					});
+	$ref = 'GCN-T' . $tier . '-' . time() . '-' . wp_rand( 1000, 9999 );
+	$verify = add_query_arg(
+		array( 'action' => 'gc_paystack_verify', 'tier' => $tier ),
+		admin_url( 'admin-post.php' )
+	);
+	?>
+	<button type="button" class="gc-button gc-button-gold gc-join-pay-btn"
+		data-gc-paystack="1"
+		data-amount="<?php echo esc_attr( $amount ); ?>"
+		data-ref="<?php echo esc_attr( $ref ); ?>"
+		data-tier="<?php echo esc_attr( $tier ); ?>"
+		data-email="<?php echo esc_attr( $email ); ?>"
+		data-verify="<?php echo esc_url( $verify ); ?>">
+		Pay ₦<?php echo esc_html( number_format_i18n( $amount ) ); ?> with Paystack
+	</button>
+	<p class="gc-join-hint" style="margin-top:10px;font-size:13px;color:#66756a;">Pay securely with Paystack. After success you will continue registration automatically. If you already paid, enter your Paystack reference below to confirm.</p>
+	<script src="https://js.paystack.co/v2/inline.js"></script>
+	<script>
+	(function(){
+		var key = <?php echo wp_json_encode( $key ); ?>;
+		document.querySelectorAll('.gc-join-pay-btn[data-gc-paystack]').forEach(function(b){
+			if (b.getAttribute('data-bound') === '1') return;
+			b.setAttribute('data-bound', '1');
+			b.addEventListener('click', function(){
+				if (!window.PaystackPop) { alert('Paystack is loading — try again in a moment.'); return; }
+				var amount = parseInt(b.getAttribute('data-amount'), 10) || 0;
+				var ref = b.getAttribute('data-ref') || '';
+				var email = b.getAttribute('data-email') || '';
+				if (!email) {
+					email = window.prompt('Enter the email you will use for this payment:') || '';
+				}
+				if (!email || email.indexOf('@') < 0) { alert('A valid email is required for Paystack.'); return; }
+				var verifyBase = b.getAttribute('data-verify') || '';
+				var popup = new PaystackPop();
+				popup.newTransaction({
+					key: key,
+					email: email,
+					amount: amount * 100,
+					reference: ref,
+					currency: 'NGN',
+					metadata: { tier: b.getAttribute('data-tier') || '1' },
+					onSuccess: function(transaction) {
+						var r = (transaction && transaction.reference) ? transaction.reference : ref;
+						window.location.href = verifyBase + '&reference=' + encodeURIComponent(r);
+					},
+					onCancel: function() {}
 				});
 			});
-		})();
-		</script>
-		<?php
-	}
-
-	if ( ! $shop && ! $key ) {
-		?>
-		<div class="gc-join-err">Payment is not configured yet. Add a Paystack public key or a Paystack Shop link in <strong>WP Admin → Settings → GC Payments</strong>.</div>
-		<?php
-	}
-
+		});
+	})();
+	</script>
+	<?php
 	return ob_get_clean();
 }
 
+
+
 add_action( 'admin_init', function () {
 	register_setting( 'gc_payments', 'gc_paystack_shop_link', array( 'sanitize_callback' => 'esc_url_raw' ) );
+	register_setting( 'gc_payments', 'gc_paystack_public_key', array( 'sanitize_callback' => 'sanitize_text_field' ) );
+	register_setting( 'gc_payments', 'gc_paystack_secret_key', array( 'sanitize_callback' => 'sanitize_text_field' ) );
+	register_setting( 'gc_payments', 'gc_cohort_paystack_link', array( 'sanitize_callback' => 'esc_url_raw' ) );
 	register_setting( 'gc_payments', 'gc_paystack_tier_links', array(
 		'sanitize_callback' => function ( $v ) {
 			$out = array();
@@ -673,6 +744,42 @@ add_action( 'after_setup_theme', function () {
 	}
 } );
 
+
+
+/** Store paid unlock permanently (and long transient). No short expiry. */
+function gc_store_paid_unlock( $ref, $data ) {
+	$ref = (string) $ref;
+	$data = is_array( $data ) ? $data : array();
+	$data['ref'] = $ref;
+	$data['time'] = isset( $data['time'] ) ? $data['time'] : time();
+	set_transient( 'gc_paid_' . md5( $ref ), $data, YEAR_IN_SECONDS * 2 );
+	$all = get_option( 'gc_paid_unlocks', array() );
+	if ( ! is_array( $all ) ) {
+		$all = array();
+	}
+	$all[ md5( $ref ) ] = $data;
+	// Keep last 2000 unlocks
+	if ( count( $all ) > 2000 ) {
+		$all = array_slice( $all, -2000, null, true );
+	}
+	update_option( 'gc_paid_unlocks', $all, false );
+}
+
+function gc_get_paid_unlock( $ref ) {
+	$ref = (string) $ref;
+	if ( ! $ref ) {
+		return false;
+	}
+	$data = get_transient( 'gc_paid_' . md5( $ref ) );
+	if ( is_array( $data ) ) {
+		return $data;
+	}
+	$all = get_option( 'gc_paid_unlocks', array() );
+	if ( is_array( $all ) && ! empty( $all[ md5( $ref ) ] ) ) {
+		return $all[ md5( $ref ) ];
+	}
+	return false;
+}
 
 /* ========== Secure payment confirmation (no free bypass) ========== */
 
@@ -701,74 +808,147 @@ function gc_handle_payment_confirm() {
 		exit;
 	}
 
-	// Admin free-invite path (for non-registered members)
-	if ( 'invite' === $method && $invite ) {
+	/* ---- A) Admin free-access code only (true bypass) ---- */
+	if ( 'invite' === $method ) {
+		if ( ! $invite ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
+			exit;
+		}
 		$invites = get_option( 'gc_free_invites', array() );
-		$key = strtoupper( $invite );
-		if ( empty( $invites[ $key ] ) || ! empty( $invites[ $key ]['revoked'] ) ) {
-			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
-			exit;
-		}
-		$inv = $invites[ $key ];
-		$max = isset( $inv['max_uses'] ) ? absint( $inv['max_uses'] ) : 10000;
-		$uses = isset( $inv['uses'] ) ? absint( $inv['uses'] ) : 0;
-		// Legacy single-use flag
-		if ( ! empty( $inv['used'] ) && empty( $inv['max_uses'] ) ) {
-			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
-			exit;
-		}
-		if ( $max > 0 && $uses >= $max ) {
-			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
-			exit;
-		}
-		// Email lock: if set, only that email may use the code
-		if ( ! empty( $inv['email'] ) ) {
-			if ( ! $email || strtolower( $inv['email'] ) !== strtolower( $email ) ) {
+		$key = strtoupper( trim( $invite ) );
+		// Also accept comma-list admin codes from settings
+		$legacy = array_filter( array_map( 'strtoupper', array_map( 'trim', explode( ',', (string) get_option( 'gc_admin_free_codes', '' ) ) ) ) );
+		$ok = false;
+		$use_tier = $tier;
+		$inv_email = '';
+		if ( ! empty( $invites[ $key ] ) && empty( $invites[ $key ]['revoked'] ) ) {
+			$inv = $invites[ $key ];
+			$max = isset( $inv['max_uses'] ) ? absint( $inv['max_uses'] ) : 10000;
+			$uses = isset( $inv['uses'] ) ? absint( $inv['uses'] ) : 0;
+			if ( ! empty( $inv['used'] ) && empty( $inv['max_uses'] ) ) {
+				wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
+				exit;
+			}
+			if ( $max > 0 && $uses >= $max ) {
+				wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
+				exit;
+			}
+			if ( ! empty( $inv['email'] ) && $email && strtolower( $inv['email'] ) !== strtolower( $email ) ) {
 				wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite_email' ) ) );
 				exit;
 			}
+			$ok = true;
+			$use_tier = ! empty( $inv['tier'] ) ? absint( $inv['tier'] ) : $tier;
+			$inv_email = $inv['email'] ?? '';
+			$invites[ $key ]['uses'] = $uses + 1;
+			update_option( 'gc_free_invites', $invites, false );
+		} elseif ( in_array( $key, $legacy, true ) ) {
+			$ok = true;
 		}
-		$use_tier = ! empty( $inv['tier'] ) ? absint( $inv['tier'] ) : $tier;
+		if ( ! $ok ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'invite' ) ) );
+			exit;
+		}
 		$ref = 'INVITE-' . $key . '-' . time() . '-' . wp_rand( 100, 999 );
-		set_transient( 'gc_paid_' . md5( $ref ), array(
-			'ref'     => $ref,
-			'tier'    => $use_tier,
-			'amount'  => 0,
-			'email'   => $email ?: ( $inv['email'] ?? '' ),
-			'time'    => time(),
-			'method'  => 'invite',
-			'invite'  => $key,
-			'free'    => 1,
-		), DAY_IN_SECONDS );
+		gc_store_paid_unlock( $ref, array(
+			'ref'    => $ref,
+			'tier'   => $use_tier,
+			'amount' => 0,
+			'email'  => $email ?: $inv_email,
+			'time'   => time(),
+			'method' => 'invite',
+			'invite' => $key,
+			'free'   => 1,
+		) );
 		wp_safe_redirect( gc_join_page_url( array( 'paid' => '1', 'tier' => $use_tier, 'ref' => $ref ) ) );
 		exit;
 	}
 
-	if ( 'paystack_email' === $method ) {
+	/* ---- B) Paystack: MUST have reference + live API verify ---- */
+	if ( 'paystack_email' === $method || 'paystack' === $method ) {
 		if ( ! is_email( $email ) ) {
 			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'email' ) ) );
 			exit;
 		}
-		$ref = $ref_in ? $ref_in : ( 'EMAIL-' . time() . '-' . wp_rand( 100, 999 ) );
-		set_transient( 'gc_paid_' . md5( $ref ), array(
-			'ref'     => $ref,
-			'tier'    => $tier,
-			'amount'  => 0,
-			'email'   => $email,
-			'time'    => time(),
-			'method'  => 'paystack_email',
-			'pending_admin' => 1, // admin can audit
-		), DAY_IN_SECONDS );
-		// Log for admin review
-		$logs = get_option( 'gc_payment_claims', array() );
-		if ( ! is_array( $logs ) ) { $logs = array(); }
-		$logs[] = array( 'ref' => $ref, 'tier' => $tier, 'email' => $email, 'method' => 'paystack_email', 'time' => current_time( 'mysql' ) );
-		update_option( 'gc_payment_claims', array_slice( $logs, -200 ), false );
-		wp_safe_redirect( gc_join_page_url( array( 'paid' => '1', 'tier' => $tier, 'ref' => $ref ) ) );
+		$ref_in = trim( $ref_in );
+		if ( strlen( $ref_in ) < 6 ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'ref_required' ) ) );
+			exit;
+		}
+		$secret = get_option( 'gc_paystack_secret_key', '' );
+		if ( ! $secret || 0 !== strpos( $secret, 'sk_' ) ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'paystack_config' ) ) );
+			exit;
+		}
+		$r = wp_remote_get(
+			'https://api.paystack.co/transaction/verify/' . rawurlencode( $ref_in ),
+			array(
+				'timeout' => 25,
+				'headers' => array( 'Authorization' => 'Bearer ' . $secret ),
+			)
+		);
+		if ( is_wp_error( $r ) ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'verify_fail' ) ) );
+			exit;
+		}
+		$body = json_decode( wp_remote_retrieve_body( $r ), true );
+		if ( empty( $body['data']['status'] ) || 'success' !== $body['data']['status'] ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'not_paid' ) ) );
+			exit;
+		}
+		$pay_email = isset( $body['data']['customer']['email'] ) ? sanitize_email( $body['data']['customer']['email'] ) : '';
+		// Email on form should match Paystack customer (case-insensitive)
+		if ( $pay_email && strtolower( $pay_email ) !== strtolower( $email ) ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'email_mismatch' ) ) );
+			exit;
+		}
+		// Prevent reusing same successful reference twice
+		$used = get_option( 'gc_used_paystack_refs', array() );
+		if ( ! is_array( $used ) ) {
+			$used = array();
+		}
+		$ref_key = strtoupper( $ref_in );
+		if ( ! empty( $used[ $ref_key ] ) ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'ref_used' ) ) );
+			exit;
+		}
+		$amount_naira = isset( $body['data']['amount'] ) ? ( (int) $body['data']['amount'] ) / 100 : 0;
+		$used[ $ref_key ] = array( 'email' => $email, 'tier' => $tier, 'time' => current_time( 'mysql' ) );
+		update_option( 'gc_used_paystack_refs', $used, false );
+
+		gc_store_paid_unlock( $ref_in, array(
+			'ref'    => $ref_in,
+			'tier'   => $tier,
+			'amount' => $amount_naira,
+			'email'  => $email,
+			'time'   => time(),
+			'method' => 'paystack_verified',
+		) );
+
+		$id = wp_insert_post( array(
+			'post_type'   => 'gc_submission',
+			'post_status' => 'private',
+			'post_title'  => 'Paystack verified — ' . $ref_in,
+		) );
+		if ( $id && ! is_wp_error( $id ) ) {
+			update_post_meta( $id, 'gc_form_type_label', 'Paystack Payment' );
+			update_post_meta( $id, 'gc_payment_reference', $ref_in );
+			update_post_meta( $id, 'gc_payment_amount', $amount_naira );
+			update_post_meta( $id, 'gc_payment_tier', $tier );
+			update_post_meta( $id, 'gc_email', $email );
+			update_post_meta( $id, 'gc_workflow_status', 'paid' );
+		}
+
+		wp_safe_redirect( gc_join_page_url( array( 'paid' => '1', 'tier' => $tier, 'ref' => $ref_in ) ) );
 		exit;
 	}
 
+	/* ---- C) Bank receipt: PENDING only — admin must approve ---- */
 	if ( 'receipt' === $method ) {
+		if ( ! is_email( $email ) ) {
+			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'email' ) ) );
+			exit;
+		}
 		if ( empty( $_FILES['receipt']['name'] ) ) {
 			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'receipt' ) ) );
 			exit;
@@ -776,32 +956,58 @@ function gc_handle_payment_confirm() {
 		if ( ! function_exists( 'wp_handle_upload' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/file.php';
 		}
-		$upload = wp_handle_upload( $_FILES['receipt'], array( 'test_form' => false, 'mimes' => array(
-			'jpg|jpeg|jpe' => 'image/jpeg',
-			'png' => 'image/png',
-			'pdf' => 'application/pdf',
-			'webp' => 'image/webp',
-		) ) );
+		$upload = wp_handle_upload( $_FILES['receipt'], array(
+			'test_form' => false,
+			'mimes'     => array(
+				'jpg|jpeg|jpe' => 'image/jpeg',
+				'png'          => 'image/png',
+				'pdf'          => 'application/pdf',
+				'webp'         => 'image/webp',
+			),
+		) );
 		if ( isset( $upload['error'] ) ) {
 			wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_err' => 'upload' ) ) );
 			exit;
 		}
-		$ref = 'RCPT-' . time() . '-' . wp_rand( 100, 999 );
-		set_transient( 'gc_paid_' . md5( $ref ), array(
-			'ref'     => $ref,
-			'tier'    => $tier,
-			'amount'  => 0,
+		$claim_id = wp_insert_post( array(
+			'post_type'   => 'gc_submission',
+			'post_status' => 'private',
+			'post_title'  => 'Bank receipt pending — ' . $email,
+		) );
+		if ( $claim_id && ! is_wp_error( $claim_id ) ) {
+			update_post_meta( $claim_id, 'gc_form_type_label', 'Bank Receipt Claim' );
+			update_post_meta( $claim_id, 'gc_email', $email );
+			update_post_meta( $claim_id, 'gc_payment_tier', $tier );
+			update_post_meta( $claim_id, 'gc_receipt_url', $upload['url'] );
+			update_post_meta( $claim_id, 'gc_workflow_status', 'pending_payment_review' );
+		}
+		$pending = get_option( 'gc_pending_receipts', array() );
+		if ( ! is_array( $pending ) ) {
+			$pending = array();
+		}
+		$pending[] = array(
+			'id'      => $claim_id,
 			'email'   => $email,
-			'time'    => time(),
-			'method'  => 'receipt',
+			'tier'    => $tier,
 			'receipt' => $upload['url'],
-			'pending_admin' => 1,
-		), DAY_IN_SECONDS );
-		$logs = get_option( 'gc_payment_claims', array() );
-		if ( ! is_array( $logs ) ) { $logs = array(); }
-		$logs[] = array( 'ref' => $ref, 'tier' => $tier, 'email' => $email, 'method' => 'receipt', 'receipt' => $upload['url'], 'time' => current_time( 'mysql' ) );
-		update_option( 'gc_payment_claims', array_slice( $logs, -200 ), false );
-		wp_safe_redirect( gc_join_page_url( array( 'paid' => '1', 'tier' => $tier, 'ref' => $ref ) ) );
+			'time'    => current_time( 'mysql' ),
+			'status'  => 'pending',
+		);
+		update_option( 'gc_pending_receipts', array_slice( $pending, -200 ), false );
+
+		$admin = function_exists( 'gc_contact_email' ) ? gc_contact_email() : get_option( 'admin_email' );
+		if ( is_email( $admin ) ) {
+			$from = apply_filters( 'wp_mail_from', 'hello@' . ( wp_parse_url( home_url(), PHP_URL_HOST ) ?: 'gamechangersnigeria.org' ) );
+			$headers = array( 'From: Game Changers Nigeria <' . $from . '>', 'Reply-To: ' . $email );
+			wp_mail(
+				$admin,
+				'[Receipt] Pending review — Tier ' . $tier . ' — ' . $email,
+				"A bank-transfer receipt was uploaded and is waiting for admin approval.\n\nEmail: {$email}\nTier: {$tier}\nReceipt: {$upload['url']}\n\nApprove in WP Admin → GC Control Room → Payment claims. Do not grant access until you confirm the transfer.",
+				$headers
+			);
+		}
+		// DO NOT set gc_paid_ transient — registration stays locked
+		wp_safe_redirect( gc_join_page_url( array( 'tier' => $tier, 'gc_pending' => '1' ) ) );
 		exit;
 	}
 
@@ -847,18 +1053,16 @@ function gc_handle_tier_upgrade() {
 	$tier = absint( $_POST['upgrade_tier'] ?? 0 );
 	$current = function_exists( 'gc_user_membership_tier' ) ? (int) gc_user_membership_tier( $uid ) : (int) get_user_meta( $uid, 'gc_premium_tier', true );
 	$tiers = function_exists( 'gc_tiers' ) ? gc_tiers() : array();
+	$dash_url = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard' ) : home_url( '/premium-dashboard/' );
 	if ( $tier < 1 || empty( $tiers[ $tier ] ) || ( $current > 0 && $tier <= $current ) ) {
-		$dash = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard' ) : home_url( '/premium-dashboard/' );
-		wp_safe_redirect( add_query_arg( 'gc_err', 'tier', $dash ) . '#gc-upgrade' );
+		wp_safe_redirect( add_query_arg( 'gc_err', 'tier', $dash_url ) . '#gc-upgrade' );
 		exit;
 	}
 	$method = sanitize_key( $_POST['confirm_method'] ?? 'paystack_email' );
 	$email  = sanitize_email( wp_unslash( $_POST['pay_email'] ?? wp_get_current_user()->user_email ) );
-	$ref_in = sanitize_text_field( wp_unslash( $_POST['pay_ref'] ?? '' ) );
+	$ref_in = trim( sanitize_text_field( wp_unslash( $_POST['pay_ref'] ?? '' ) ) );
 	$invite = sanitize_text_field( wp_unslash( $_POST['invite_code'] ?? '' ) );
-	$dash_url = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard' ) : home_url( '/premium-dashboard/' );
 
-	$receipt = '';
 	if ( 'invite' === $method ) {
 		$invites = get_option( 'gc_free_invites', array() );
 		$key = strtoupper( trim( $invite ) );
@@ -867,34 +1071,65 @@ function gc_handle_tier_upgrade() {
 			$inv = $invites[ $key ];
 			$max = isset( $inv['max_uses'] ) ? absint( $inv['max_uses'] ) : 10000;
 			$uses = isset( $inv['uses'] ) ? absint( $inv['uses'] ) : 0;
-			if ( ! empty( $inv['used'] ) && empty( $inv['max_uses'] ) ) {
-				$ok = false;
-			} elseif ( $max > 0 && $uses >= $max ) {
-				$ok = false;
-			} else {
+			if ( ( empty( $inv['used'] ) || ! empty( $inv['max_uses'] ) ) && ( $max <= 0 || $uses < $max ) ) {
 				$ok = true;
 				$invites[ $key ]['uses'] = $uses + 1;
-				if ( empty( $inv['max_uses'] ) ) {
-					$invites[ $key ]['used'] = 1;
-				}
 				update_option( 'gc_free_invites', $invites, false );
 			}
 		}
-		// Fallback simple option
 		if ( ! $ok ) {
-			$single = strtoupper( trim( (string) get_option( 'gc_admin_invite_code', '' ) ) );
 			$codes = array_filter( array_map( 'strtoupper', array_map( 'trim', explode( ',', (string) get_option( 'gc_admin_free_codes', '' ) ) ) ) );
-			if ( $single ) {
-				$codes[] = $single;
-			}
+			$single = strtoupper( trim( (string) get_option( 'gc_admin_invite_code', '' ) ) );
+			if ( $single ) { $codes[] = $single; }
 			$ok = $key && in_array( $key, $codes, true );
 		}
 		if ( ! $ok ) {
 			wp_safe_redirect( add_query_arg( 'gc_err', 'invite', $dash_url ) . '#gc-upgrade' );
 			exit;
 		}
-		$ref_in = $ref_in ?: ( 'INVITE-' . $key . '-' . $uid );
-	} elseif ( 'receipt' === $method ) {
+		gc_migrate_user_to_premium( $uid, $tier, 'INVITE-UPG-' . $key . '-' . $uid );
+		wp_safe_redirect( add_query_arg( 'gc_upgraded', '1', $dash_url ) );
+		exit;
+	}
+
+	if ( 'paystack_email' === $method || 'paystack' === $method ) {
+		if ( strlen( $ref_in ) < 6 ) {
+			wp_safe_redirect( add_query_arg( 'gc_err', 'ref_required', $dash_url ) . '#gc-upgrade' );
+			exit;
+		}
+		$secret = get_option( 'gc_paystack_secret_key', '' );
+		if ( ! $secret || 0 !== strpos( $secret, 'sk_' ) ) {
+			wp_safe_redirect( add_query_arg( 'gc_err', 'paystack_config', $dash_url ) . '#gc-upgrade' );
+			exit;
+		}
+		$r = wp_remote_get(
+			'https://api.paystack.co/transaction/verify/' . rawurlencode( $ref_in ),
+			array( 'timeout' => 25, 'headers' => array( 'Authorization' => 'Bearer ' . $secret ) )
+		);
+		if ( is_wp_error( $r ) ) {
+			wp_safe_redirect( add_query_arg( 'gc_err', 'verify_fail', $dash_url ) . '#gc-upgrade' );
+			exit;
+		}
+		$body = json_decode( wp_remote_retrieve_body( $r ), true );
+		if ( empty( $body['data']['status'] ) || 'success' !== $body['data']['status'] ) {
+			wp_safe_redirect( add_query_arg( 'gc_err', 'not_paid', $dash_url ) . '#gc-upgrade' );
+			exit;
+		}
+		$used = get_option( 'gc_used_paystack_refs', array() );
+		if ( ! is_array( $used ) ) { $used = array(); }
+		$ref_key = strtoupper( $ref_in );
+		if ( ! empty( $used[ $ref_key ] ) ) {
+			wp_safe_redirect( add_query_arg( 'gc_err', 'ref_used', $dash_url ) . '#gc-upgrade' );
+			exit;
+		}
+		$used[ $ref_key ] = array( 'email' => $email, 'tier' => $tier, 'uid' => $uid, 'time' => current_time( 'mysql' ) );
+		update_option( 'gc_used_paystack_refs', $used, false );
+		gc_migrate_user_to_premium( $uid, $tier, $ref_in );
+		wp_safe_redirect( add_query_arg( 'gc_upgraded', '1', $dash_url ) );
+		exit;
+	}
+
+	if ( 'receipt' === $method ) {
 		if ( empty( $_FILES['receipt']['name'] ) ) {
 			wp_safe_redirect( add_query_arg( 'gc_err', 'receipt', $dash_url ) . '#gc-upgrade' );
 			exit;
@@ -907,32 +1142,124 @@ function gc_handle_tier_upgrade() {
 			wp_safe_redirect( add_query_arg( 'gc_err', 'upload', $dash_url ) . '#gc-upgrade' );
 			exit;
 		}
-		$receipt = $upload['url'];
-	} else {
-		if ( ! is_email( $email ) ) {
-			wp_safe_redirect( add_query_arg( 'gc_err', 'email', $dash_url ) . '#gc-upgrade' );
-			exit;
+		$id = wp_insert_post( array(
+			'post_type'   => 'gc_submission',
+			'post_status' => 'private',
+			'post_title'  => 'Upgrade receipt pending — ' . $email,
+		) );
+		if ( $id && ! is_wp_error( $id ) ) {
+			update_post_meta( $id, 'gc_form_type_label', 'Bank Receipt Claim' );
+			update_post_meta( $id, 'gc_email', $email );
+			update_post_meta( $id, 'gc_payment_tier', $tier );
+			update_post_meta( $id, 'gc_user_id', $uid );
+			update_post_meta( $id, 'gc_receipt_url', $upload['url'] );
+			update_post_meta( $id, 'gc_workflow_status', 'pending_payment_review' );
 		}
+		$admin = function_exists( 'gc_contact_email' ) ? gc_contact_email() : get_option( 'admin_email' );
+		if ( is_email( $admin ) ) {
+			$from = apply_filters( 'wp_mail_from', 'hello@' . ( wp_parse_url( home_url(), PHP_URL_HOST ) ?: 'gamechangersnigeria.org' ) );
+			wp_mail( $admin, '[Upgrade receipt] Tier ' . $tier . ' — ' . $email, "Pending admin approval.\nReceipt: {$upload['url']}\nUser ID: {$uid}", array( 'From: Game Changers Nigeria <' . $from . '>' ) );
+		}
+		// Do NOT upgrade until admin approves
+		wp_safe_redirect( add_query_arg( 'gc_pending', '1', $dash_url ) . '#gc-upgrade' );
+		exit;
 	}
 
-	// Apply upgrade / free→premium migration (same email & password)
-	gc_migrate_user_to_premium( $uid, $tier, $ref_in ?: ( 'UPG-T' . $tier . '-' . $uid . '-' . time() ) );
-	$ref = $ref_in ?: ( 'UPG-T' . $tier . '-' . $uid . '-' . time() );
-	$logs = get_option( 'gc_payment_claims', array() );
-	if ( ! is_array( $logs ) ) { $logs = array(); }
-	$logs[] = array(
-		'ref' => $ref,
-		'tier' => $tier,
-		'email' => $email,
-		'method' => 'upgrade_' . $method,
-		'receipt' => $receipt,
-		'user_id' => $uid,
-		'time' => current_time( 'mysql' ),
-	);
-	update_option( 'gc_payment_claims', array_slice( $logs, -200 ), false );
-	update_user_meta( $uid, 'gc_last_upgrade_at', current_time( 'mysql' ) );
-	update_user_meta( $uid, 'gc_last_upgrade_ref', $ref );
-	wp_safe_redirect( home_url( '/premium-dashboard/?upgraded=1#gc-upgrade' ) );
+	wp_safe_redirect( add_query_arg( 'gc_err', 'method', $dash_url ) . '#gc-upgrade' );
 	exit;
 }
 add_action( 'admin_post_gc_tier_upgrade', 'gc_handle_tier_upgrade' );
+
+
+/**
+ * Donation: log amount, email, narration — then send donor to Paystack Shop.
+ */
+function gc_handle_donate_start() {
+	if ( empty( $_POST['gc_donate_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['gc_donate_nonce'] ) ), 'gc_donate_start' ) ) {
+		wp_die( esc_html__( 'Security check failed.', 'game-changers' ), 403 );
+	}
+	$email = sanitize_email( wp_unslash( $_POST['gc_email'] ?? '' ) );
+	$amount = absint( $_POST['gc_amount'] ?? 0 );
+	$narration = sanitize_textarea_field( wp_unslash( $_POST['gc_narration'] ?? '' ) );
+	$shop = trim( (string) get_option( 'gc_paystack_shop_link', '' ) );
+	if ( ! $shop ) {
+		$shop = 'https://paystack.shop/pay/tzpci3b9qo';
+	}
+	$donate_page = function_exists( 'gc_page_url' ) ? gc_page_url( 'donate' ) : home_url( '/donate/' );
+
+	if ( ! is_email( $email ) || $amount < 100 || strlen( $narration ) < 2 ) {
+		wp_safe_redirect( add_query_arg( 'gc_err', 'fields', $donate_page ) );
+		exit;
+	}
+
+	$log = get_option( 'gc_donation_intents', array() );
+	if ( ! is_array( $log ) ) {
+		$log = array();
+	}
+	$log[] = array(
+		'email'     => $email,
+		'amount'    => $amount,
+		'narration' => $narration,
+		'user_id'   => get_current_user_id(),
+		'time'      => current_time( 'mysql' ),
+		'ip'        => isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '',
+	);
+	update_option( 'gc_donation_intents', array_slice( $log, -300 ), false );
+
+	// Notify admin so they know purpose / source
+	$admin = function_exists( 'gc_contact_email' ) ? gc_contact_email() : get_option( 'admin_email' );
+	if ( is_email( $admin ) ) {
+		$from = apply_filters( 'wp_mail_from', 'hello@' . ( wp_parse_url( home_url(), PHP_URL_HOST ) ?: 'gamechangersnigeria.org' ) );
+		$headers = array(
+			'From: Game Changers Nigeria <' . $from . '>',
+			'Reply-To: ' . $email,
+		);
+		$subject = sprintf( '[Donation] ₦%s — %s', number_format_i18n( $amount ), $email );
+		$body    = "New donation intent (Paystack Shop)\n\n";
+		$body   .= 'Amount: ₦' . number_format_i18n( $amount ) . "\n";
+		$body   .= 'Email: ' . $email . "\n";
+		$body   .= "Narration / purpose:\n" . $narration . "\n\n";
+		$body   .= 'Time: ' . current_time( 'mysql' ) . "\n";
+		$body   .= "Donor will complete payment at: " . $shop . "\n";
+		wp_mail( $admin, $subject, $body, $headers );
+	}
+
+	// Open Paystack Shop — amount is chosen on Paystack page if shop allows custom
+	wp_redirect( $shop );
+	exit;
+}
+add_action( 'admin_post_gc_donate_start', 'gc_handle_donate_start' );
+add_action( 'admin_post_nopriv_gc_donate_start', 'gc_handle_donate_start' );
+
+
+/** Log donation intent (email + narration) before Paystack popup. */
+function gc_ajax_donate_intent_log() {
+	$email = sanitize_email( wp_unslash( $_POST['email'] ?? $_REQUEST['email'] ?? '' ) );
+	$amount = absint( $_POST['amount'] ?? $_REQUEST['amount'] ?? 0 );
+	$narration = sanitize_textarea_field( wp_unslash( $_POST['narration'] ?? $_REQUEST['narration'] ?? '' ) );
+	$ref = sanitize_text_field( wp_unslash( $_POST['ref'] ?? $_REQUEST['ref'] ?? '' ) );
+	$log = get_option( 'gc_donation_intents', array() );
+	if ( ! is_array( $log ) ) { $log = array(); }
+	$log[] = array(
+		'email' => $email,
+		'amount' => $amount,
+		'narration' => $narration,
+		'ref' => $ref,
+		'time' => current_time( 'mysql' ),
+		'method' => 'paystack_live',
+	);
+	update_option( 'gc_donation_intents', array_slice( $log, -300 ), false );
+	$admin = function_exists( 'gc_contact_email' ) ? gc_contact_email() : get_option( 'admin_email' );
+	if ( is_email( $admin ) && is_email( $email ) ) {
+		$from = apply_filters( 'wp_mail_from', 'hello@' . ( wp_parse_url( home_url(), PHP_URL_HOST ) ?: 'gamechangersnigeria.org' ) );
+		wp_mail(
+			$admin,
+			sprintf( '[Donation] ₦%s — %s', number_format_i18n( $amount ), $email ),
+			"Live Paystack donation started.\n\nAmount: ₦" . number_format_i18n( $amount ) . "\nEmail: {$email}\nNarration: {$narration}\nRef: {$ref}\n",
+			array( 'From: Game Changers Nigeria <' . $from . '>', 'Reply-To: ' . $email )
+		);
+	}
+	wp_send_json_success();
+}
+add_action( 'wp_ajax_gc_donate_intent_log', 'gc_ajax_donate_intent_log' );
+add_action( 'wp_ajax_nopriv_gc_donate_intent_log', 'gc_ajax_donate_intent_log' );

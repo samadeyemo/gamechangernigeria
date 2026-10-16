@@ -1,22 +1,20 @@
 <?php
 /**
  * Template Name: Donate
- * Mature donation page with validated Paystack public key.
+ * Live Paystack payment + narration for admin.
  */
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 get_header();
 
-$pk_raw = trim( (string) get_option( 'gc_paystack_public_key', '' ) );
-// Accept only live/test public keys
-$pk = ( 0 === strpos( $pk_raw, 'pk_' ) ) ? $pk_raw : '';
-$pk_invalid = $pk_raw && ! $pk;
+$key       = trim( (string) get_option( 'gc_paystack_public_key', '' ) );
 $bank_name = get_option( 'gc_bank_name', '' );
 $bank_acct = get_option( 'gc_bank_account_name', '' );
 $bank_num  = get_option( 'gc_bank_account_number', '' );
 $note      = get_option( 'gc_donation_note', 'Support the work of Game Changers Nigeria.' );
 $email_pre = is_user_logged_in() ? wp_get_current_user()->user_email : '';
+$ok_key    = $key && ( 0 === strpos( $key, 'pk_' ) );
 ?>
 <style>
 .gc-donate-page{padding:0 0 80px}
@@ -28,22 +26,21 @@ $email_pre = is_user_logged_in() ? wp_get_current_user()->user_email : '';
 .gc-donate-card{background:#fff;border:1px solid rgba(13,26,15,.1);border-radius:16px;padding:28px 24px;box-shadow:0 18px 50px rgba(13,26,15,.08)}
 .gc-donate-card h2{font-family:'Playfair Display',serif;font-size:24px;margin:0 0 18px}
 .gc-donate-card label{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin:0 0 6px;color:#0d1a0f}
-.gc-donate-card input{width:100%;min-height:48px;padding:0 14px;border:1px solid rgba(13,26,15,.16);border-radius:10px;font-size:16px;margin-bottom:16px;box-sizing:border-box}
+.gc-donate-card input,.gc-donate-card textarea{width:100%;padding:12px 14px;border:1px solid rgba(13,26,15,.16);border-radius:10px;font-size:16px;margin-bottom:16px;box-sizing:border-box;font-family:inherit}
+.gc-donate-card textarea{min-height:88px;resize:vertical;line-height:1.5}
+.gc-donate-card input{min-height:48px}
 .gc-donate-amounts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
 .gc-donate-amounts button{flex:1 1 30%;min-height:42px;border:1px solid rgba(13,26,15,.14);background:#f5f2ec;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px}
 .gc-donate-amounts button.is-active{background:#006b3f;color:#fff;border-color:#006b3f}
-.gc-donate-actions{display:flex;flex-direction:column;gap:10px;margin-top:8px}
-.gc-donate-actions .gc-button{width:100%;min-height:50px}
+.gc-donate-actions{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.gc-donate-actions .gc-button{width:100%;min-height:50px;text-align:center;border:0;cursor:pointer}
 .gc-donate-bank{margin-top:20px;padding:16px;background:#f5f2ec;border-radius:12px;font-size:14px;line-height:1.6;display:none}
 .gc-donate-bank.is-open{display:block}
 .gc-donate-bank strong{display:block;margin-bottom:6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#006b3f}
-.gc-donate-note{font-size:13px;color:#66756a;margin:14px 0 0;line-height:1.55}
-.gc-donate-err{background:rgba(180,40,40,.08);border:1px solid rgba(180,40,40,.2);color:#8b1a1a;padding:12px 14px;border-radius:10px;font-size:13px;margin-bottom:16px;line-height:1.5}
+.gc-donate-hint{font-size:12px;color:#66756a;margin:-8px 0 14px;line-height:1.5}
 .gc-donate-secure{text-align:center;font-size:12px;color:#66756a;margin-top:14px}
-@media(max-width:600px){
-  .gc-donate-hero{padding:100px 4vw 48px}
-  .gc-donate-card{padding:22px 18px}
-}
+.gc-donate-err{background:#fff3f0;border:1px solid #f0c0b0;color:#8b2e1a;padding:12px;border-radius:10px;margin-bottom:14px;font-size:14px}
+@media(max-width:600px){.gc-donate-hero{padding:100px 4vw 48px}.gc-donate-card{padding:22px 18px}}
 </style>
 <main class="gc-donate-page">
   <section class="gc-donate-hero">
@@ -54,15 +51,8 @@ $email_pre = is_user_logged_in() ? wp_get_current_user()->user_email : '';
   <div class="gc-donate-wrap">
     <div class="gc-donate-card">
       <h2><?php esc_html_e( 'Make a donation', 'game-changers' ); ?></h2>
-
-      <?php if ( $pk_invalid ) : ?>
-        <div class="gc-donate-err">
-          <?php esc_html_e( 'Paystack is misconfigured: a public key must start with pk_ (test or live). Update it under WP Admin → Theme payments / Paystack settings. Secret keys (sk_) cannot be used in the browser.', 'game-changers' ); ?>
-        </div>
-      <?php elseif ( ! $pk ) : ?>
-        <div class="gc-donate-err">
-          <?php esc_html_e( 'Online card payment is not available yet. Use bank transfer below, or ask an admin to add the Paystack public key (pk_…).', 'game-changers' ); ?>
-        </div>
+      <?php if ( ! $ok_key ) : ?>
+        <div class="gc-donate-err"><?php esc_html_e( 'Live Paystack is not configured yet. Admin: Settings → GC Payments → public key (pk_live_…).', 'game-changers' ); ?></div>
       <?php endif; ?>
 
       <label for="gc-donation-amount"><?php esc_html_e( 'Donation amount (₦)', 'game-changers' ); ?></label>
@@ -77,9 +67,13 @@ $email_pre = is_user_logged_in() ? wp_get_current_user()->user_email : '';
       <label for="gc-donation-email"><?php esc_html_e( 'Your email', 'game-changers' ); ?></label>
       <input id="gc-donation-email" type="email" value="<?php echo esc_attr( $email_pre ); ?>" placeholder="you@example.com" autocomplete="email">
 
+      <label for="gc-donation-narration"><?php esc_html_e( 'Narration / purpose', 'game-changers' ); ?></label>
+      <p class="gc-donate-hint"><?php esc_html_e( 'What is this gift for? (chapter support, scholarship, general fund, etc.)', 'game-changers' ); ?></p>
+      <textarea id="gc-donation-narration" maxlength="400" placeholder="<?php esc_attr_e( 'e.g. Support for Ibadan chapter', 'game-changers' ); ?>"></textarea>
+
       <div class="gc-donate-actions">
-        <?php if ( $pk ) : ?>
-          <button class="gc-button gc-button-gold" type="button" id="gc-donate-paystack"><?php esc_html_e( 'Donate with Paystack', 'game-changers' ); ?></button>
+        <?php if ( $ok_key ) : ?>
+          <button class="gc-button gc-button-gold" type="button" id="gc-donate-pay"><?php esc_html_e( 'Pay with Paystack', 'game-changers' ); ?></button>
         <?php endif; ?>
         <button class="gc-button gc-button-outline" type="button" id="gc-donate-bank-toggle"><?php esc_html_e( 'Bank transfer details', 'game-changers' ); ?></button>
       </div>
@@ -90,93 +84,72 @@ $email_pre = is_user_logged_in() ? wp_get_current_user()->user_email : '';
           <div><?php echo esc_html( $bank_name ); ?></div>
           <div><?php echo esc_html( $bank_acct ); ?></div>
           <div><code style="font-size:15px;font-weight:700;"><?php echo esc_html( $bank_num ); ?></code></div>
-          <p class="gc-donate-note"><?php esc_html_e( 'Use your full name as the narration. Email a receipt to the team if requested.', 'game-changers' ); ?></p>
         <?php else : ?>
-          <p><?php esc_html_e( 'Bank details will appear here once an admin adds them in settings.', 'game-changers' ); ?></p>
+          <p><?php esc_html_e( 'Bank details will appear once an admin adds them in GC Payments.', 'game-changers' ); ?></p>
         <?php endif; ?>
       </div>
-
-      <?php if ( $pk ) : ?>
-        <p class="gc-donate-secure">🔒 <?php esc_html_e( 'Secured by Paystack', 'game-changers' ); ?></p>
-      <?php endif; ?>
+      <p class="gc-donate-secure">🔒 <?php esc_html_e( 'Secured by Paystack', 'game-changers' ); ?></p>
     </div>
   </div>
 </main>
+<?php if ( $ok_key ) : ?>
+<script src="https://js.paystack.co/v2/inline.js"></script>
 <script>
 (function(){
+  var key = <?php echo wp_json_encode( $key ); ?>;
   var presets = document.getElementById('gc-donate-presets');
-  var amount = document.getElementById('gc-donation-amount');
-  if (presets && amount) {
+  var amountEl = document.getElementById('gc-donation-amount');
+  var emailEl = document.getElementById('gc-donation-email');
+  var narrEl = document.getElementById('gc-donation-narration');
+  if (presets && amountEl) {
     presets.addEventListener('click', function(e){
       var b = e.target.closest('button[data-amt]');
       if (!b) return;
-      amount.value = b.getAttribute('data-amt');
+      amountEl.value = b.getAttribute('data-amt');
       presets.querySelectorAll('button').forEach(function(x){ x.classList.remove('is-active'); });
       b.classList.add('is-active');
     });
   }
   var bankBtn = document.getElementById('gc-donate-bank-toggle');
   var bankBox = document.getElementById('gc-donate-bank');
-  if (bankBtn && bankBox) {
-    bankBtn.addEventListener('click', function(){
-      bankBox.classList.toggle('is-open');
-    });
-  }
-})();
-</script>
-<?php if ( $pk ) : ?>
-<script src="https://js.paystack.co/v2/inline.js"></script>
-<script>
-(function(){
-  var btn = document.getElementById('gc-donate-paystack');
-  if (!btn || typeof PaystackPop === 'undefined') return;
-  var key = <?php echo wp_json_encode( $pk ); ?>;
-  btn.addEventListener('click', function(){
-    var email = (document.getElementById('gc-donation-email') || {}).value || '';
-    var amt = Number((document.getElementById('gc-donation-amount') || {}).value || 0);
-    if (!email || email.indexOf('@') < 1) {
-      alert('Please enter a valid email.');
-      return;
-    }
-    if (!amt || amt < 100) {
-      alert('Minimum donation is ₦100.');
-      return;
-    }
-    if (!key || key.indexOf('pk_') !== 0) {
-      alert('Paystack public key is missing or invalid. Ask an admin to set a key starting with pk_.');
-      return;
-    }
-    try {
-      var handler = PaystackPop.setup({
+  if (bankBtn && bankBox) bankBtn.addEventListener('click', function(){ bankBox.classList.toggle('is-open'); });
+
+  var payBtn = document.getElementById('gc-donate-pay');
+  if (payBtn) {
+    payBtn.addEventListener('click', function(){
+      if (!window.PaystackPop) { alert('Paystack is loading — try again.'); return; }
+      var amount = parseInt(amountEl.value, 10) || 0;
+      var email = (emailEl.value || '').trim();
+      var narration = (narrEl.value || '').trim();
+      if (amount < 100) { alert('Enter a valid amount.'); return; }
+      if (!email || email.indexOf('@') < 0) { alert('Enter a valid email.'); return; }
+      if (narration.length < 2) { alert('Please add a short narration so we know what this gift is for.'); return; }
+      var ref = 'GCN-DON-' + Date.now() + '-' + Math.floor(Math.random()*9000+1000);
+      // Log intent to server (optional beacon)
+      try {
+        var fd = new FormData();
+        fd.append('action', 'gc_donate_intent_log');
+        fd.append('email', email);
+        fd.append('amount', amount);
+        fd.append('narration', narration);
+        fd.append('ref', ref);
+        navigator.sendBeacon && navigator.sendBeacon('<?php echo esc_url( admin_url( 'admin-ajax.php' ) ); ?>', fd);
+      } catch (e) {}
+      var popup = new PaystackPop();
+      popup.newTransaction({
         key: key,
         email: email,
-        amount: Math.round(amt * 100),
+        amount: amount * 100,
+        reference: ref,
         currency: 'NGN',
-        ref: 'GCN-DON-' + Date.now(),
-        callback: function(response){
-          var u = <?php echo wp_json_encode( admin_url( 'admin-post.php' ) ); ?> + '?action=gc_paystack_verify&reference=' + encodeURIComponent(response.reference);
-          window.location.href = u;
+        metadata: { purpose: narration, type: 'donation' },
+        onSuccess: function(transaction) {
+          alert('Thank you. Payment received' + (transaction && transaction.reference ? ' — ref: ' + transaction.reference : '') + '.');
         },
-        onClose: function(){}
+        onCancel: function() {}
       });
-      handler.openIframe();
-    } catch (err) {
-      // Fallback to v2 newTransaction API
-      try {
-        var p = new PaystackPop();
-        p.newTransaction({
-          key: key,
-          email: email,
-          amount: Math.round(amt * 100),
-          onSuccess: function(t){
-            window.location.href = <?php echo wp_json_encode( admin_url( 'admin-post.php' ) ); ?> + '?action=gc_paystack_verify&reference=' + encodeURIComponent(t.reference);
-          }
-        });
-      } catch (e2) {
-        alert('Could not start Paystack. Check that the public key is valid (pk_test_… or pk_live_…).');
-      }
-    }
-  });
+    });
+  }
 })();
 </script>
 <?php endif; ?>

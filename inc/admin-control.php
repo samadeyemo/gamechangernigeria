@@ -289,6 +289,25 @@ function gc_render_control_access() {
 	if ( ! current_user_can( 'manage_options' ) ) {
 		return;
 	}
+	echo '<div class="wrap"><h1>Members Access</h1>';
+	if ( ! empty( $_GET['gc_email_ok'] ) ) {
+		echo '<div class="notice notice-success"><p>Member email updated. Password reset sent to the new address if selected.</p></div>';
+	}
+	if ( ! empty( $_GET['gc_email_err'] ) ) {
+		$errs = array( 'invalid' => 'Invalid email.', 'notfound' => 'No user with that old email.', 'taken' => 'New email already in use.', 'fail' => 'Update failed.' );
+		$e = sanitize_key( $_GET['gc_email_err'] );
+		echo '<div class="notice notice-error"><p>' . esc_html( $errs[ $e ] ?? 'Error' ) . '</p></div>';
+	}
+	echo '<h2>Fix member email &amp; send password reset</h2>';
+	echo '<p>Use when someone registered with the wrong email or is not receiving mail. Login name stays the same; email used for mail and login-by-email updates.</p>';
+	echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="max-width:520px;background:#fff;padding:16px;border:1px solid #ccd0d4;border-radius:8px;margin-bottom:28px;">';
+	echo '<input type="hidden" name="action" value="gc_change_member_email">';
+	wp_nonce_field( 'gc_change_member_email' );
+	echo '<p><label>Current email on account<br><input type="email" name="old_email" class="regular-text" required></label></p>';
+	echo '<p><label>New correct email<br><input type="email" name="new_email" class="regular-text" required></label></p>';
+	echo '<p><label><input type="checkbox" name="send_reset" value="1" checked> Send password-reset link to the <strong>new</strong> email</label></p>';
+	echo '<p><button type="submit" class="button button-primary">Update email</button></p>';
+	echo '</form>';
 	$msg = '';
 	// Free invite for non-registered people
 	if ( isset( $_POST['gc_invite_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['gc_invite_nonce'] ) ), 'gc_invite' ) ) {
@@ -618,28 +637,189 @@ add_action( 'admin_footer', function () {
 
 function gc_render_control_claims() {
 	if ( ! current_user_can( 'manage_options' ) ) { return; }
+
+	// Pending bank receipts from submissions
+	$pending_posts = get_posts( array(
+		'post_type'      => 'gc_submission',
+		'post_status'    => 'private',
+		'posts_per_page' => 100,
+		'meta_key'       => 'gc_workflow_status',
+		'meta_value'     => 'pending_payment_review',
+		'orderby'        => 'date',
+		'order'          => 'DESC',
+	) );
+	$pending_opt = get_option( 'gc_pending_receipts', array() );
+	if ( ! is_array( $pending_opt ) ) { $pending_opt = array(); }
 	$logs = get_option( 'gc_payment_claims', array() );
 	if ( ! is_array( $logs ) ) { $logs = array(); }
-	echo '<div class="wrap"><h1>Payment confirmation claims</h1>';
-	echo '<p>Members who confirmed via Paystack email or bank receipt. Review receipts as needed.</p>';
-	echo '<table class="widefat striped"><thead><tr><th>Time</th><th>Method</th><th>Email</th><th>Tier</th><th>Ref</th><th>Receipt</th></tr></thead><tbody>';
+
+	echo '<div class="wrap"><h1>Payment claims</h1>';
+	if ( ! empty( $_GET['gc_approved'] ) ) {
+		echo '<div class="notice notice-success is-dismissible"><p>Receipt approved. Member was emailed a permanent registration link (same payment email).</p></div>';
+	}
+	if ( ! empty( $_GET['gc_mail_fail'] ) ) {
+		echo '<div class="notice notice-warning is-dismissible"><p>Approved, but the confirmation email may not have sent. Check SMTP / hosting mail. Member can still continue on Become a Member using the same email (see “Admin already approved”).</p></div>';
+	}
+	if ( ! empty( $_GET['gc_deleted'] ) ) {
+		echo '<div class="notice notice-success is-dismissible"><p>Pending claim deleted.</p></div>';
+	}
+	echo '<p>Approve bank receipts only after you confirm the transfer. Paystack references are verified automatically — they do not need approval here.</p>';
+
+	echo '<h2>Pending bank receipts (action required)</h2>';
+	echo '<table class="widefat striped"><thead><tr><th>Time</th><th>Email</th><th>Tier</th><th>Receipt</th><th>Action</th></tr></thead><tbody>';
+	$rows = 0;
+	foreach ( $pending_posts as $p ) {
+		$rows++;
+		$email = get_post_meta( $p->ID, 'gc_email', true );
+		$tier  = (int) get_post_meta( $p->ID, 'gc_payment_tier', true );
+		$url   = get_post_meta( $p->ID, 'gc_receipt_url', true );
+		$approve = wp_nonce_url(
+			admin_url( 'admin-post.php?action=gc_approve_receipt&claim_id=' . (int) $p->ID . '&email=' . rawurlencode( $email ) . '&tier=' . $tier ),
+			'gc_approve_receipt'
+		);
+		echo '<tr>';
+		echo '<td>' . esc_html( get_the_date( 'Y-m-d H:i', $p ) ) . '</td>';
+		echo '<td>' . esc_html( $email ) . '</td>';
+		echo '<td>' . esc_html( $tier ?: '—' ) . '</td>';
+		echo '<td>' . ( $url ? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener">View receipt</a>' : '—' ) . '</td>';
+		$delete = wp_nonce_url(
+			admin_url( 'admin-post.php?action=gc_delete_receipt&claim_id=' . (int) $p->ID . '&email=' . rawurlencode( $email ) ),
+			'gc_delete_receipt'
+		);
+		echo '<td style="white-space:nowrap;">';
+		echo '<a class="button button-primary" href="' . esc_url( $approve ) . '" onclick="return confirm(\'Confirm this bank payment and email the member?\');">Approve &amp; email member</a> ';
+		echo '<a class="button" style="color:#b32d2e;" href="' . esc_url( $delete ) . '" onclick="return confirm(\'Delete this pending claim?\');">Delete</a>';
+		echo '</td>';
+		echo '</tr>';
+	}
+	// Option-based pending not already in posts
+	foreach ( array_reverse( $pending_opt ) as $row ) {
+		if ( ( $row['status'] ?? '' ) === 'approved' ) { continue; }
+		$id = absint( $row['id'] ?? 0 );
+		if ( $id ) {
+			$already = false;
+			foreach ( $pending_posts as $p ) {
+				if ( (int) $p->ID === $id ) { $already = true; break; }
+			}
+			if ( $already ) { continue; }
+		}
+		$rows++;
+		$email = $row['email'] ?? '';
+		$tier  = (int) ( $row['tier'] ?? 0 );
+		$url   = $row['receipt'] ?? '';
+		$approve = wp_nonce_url(
+			admin_url( 'admin-post.php?action=gc_approve_receipt&claim_id=' . $id . '&email=' . rawurlencode( $email ) . '&tier=' . $tier ),
+			'gc_approve_receipt'
+		);
+		echo '<tr>';
+		echo '<td>' . esc_html( $row['time'] ?? '' ) . '</td>';
+		echo '<td>' . esc_html( $email ) . '</td>';
+		echo '<td>' . esc_html( $tier ?: '—' ) . '</td>';
+		echo '<td>' . ( $url ? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener">View receipt</a>' : '—' ) . '</td>';
+		$delete = wp_nonce_url(
+			admin_url( 'admin-post.php?action=gc_delete_receipt&claim_id=' . $id . '&email=' . rawurlencode( $email ) ),
+			'gc_delete_receipt'
+		);
+		echo '<td style="white-space:nowrap;">';
+		echo '<a class="button button-primary" href="' . esc_url( $approve ) . '" onclick="return confirm(\'Confirm this bank payment and email the member?\');">Approve &amp; email member</a> ';
+		echo '<a class="button" style="color:#b32d2e;" href="' . esc_url( $delete ) . '" onclick="return confirm(\'Delete this pending claim?\');">Delete</a>';
+		echo '</td>';
+		echo '</tr>';
+	}
+	if ( ! $rows ) {
+		echo '<tr><td colspan="5">No pending receipts.</td></tr>';
+	}
+	echo '</tbody></table>';
+
+	echo '<h2 style="margin-top:32px;">Recent confirmation log</h2>';
+	echo '<table class="widefat striped"><thead><tr><th>Time</th><th>Method</th><th>Email</th><th>Tier</th><th>Ref</th><th>Receipt</th><th></th></tr></thead><tbody>';
 	if ( ! $logs ) {
-		echo '<tr><td colspan="6">No claims yet.</td></tr>';
+		echo '<tr><td colspan="7">No claims logged yet.</td></tr>';
 	} else {
-		foreach ( array_reverse( $logs ) as $row ) {
+		foreach ( array_reverse( $logs, true ) as $idx => $row ) {
+			$row['_idx'] = $idx;
 			echo '<tr>';
 			echo '<td>' . esc_html( $row['time'] ?? '' ) . '</td>';
 			echo '<td>' . esc_html( $row['method'] ?? '' ) . '</td>';
 			echo '<td>' . esc_html( $row['email'] ?? '' ) . '</td>';
 			echo '<td>' . (int) ( $row['tier'] ?? 0 ) . '</td>';
 			echo '<td><code>' . esc_html( $row['ref'] ?? '' ) . '</code></td>';
-			if ( ! empty( $row['receipt'] ) ) {
-				echo '<td><a href="' . esc_url( $row['receipt'] ) . '" target="_blank">View</a></td>';
-			} else {
-				echo '<td>—</td>';
-			}
+			echo '<td>' . ( ! empty( $row['receipt'] ) ? '<a href="' . esc_url( $row['receipt'] ) . '" target="_blank">View</a>' : '—' ) . '</td>';
+			$idx = isset( $row['_idx'] ) ? (int) $row['_idx'] : -1;
+			$del = wp_nonce_url( admin_url( 'admin-post.php?action=gc_delete_claim_log&idx=' . $idx ), 'gc_delete_claim_log' );
+			echo '<td><a class="button" style="color:#b32d2e;" href="' . esc_url( $del ) . '" onclick="return confirm(\'Delete this log row?\');">Delete</a></td>';
 			echo '</tr>';
 		}
 	}
 	echo '</tbody></table></div>';
 }
+
+
+
+/** Approve mentor application → public mentor profile */
+function gc_admin_approve_mentor() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( 'Forbidden', 403 );
+	}
+	check_admin_referer( 'gc_approve_mentor' );
+	$id = absint( $_GET['submission_id'] ?? 0 );
+	$sub = get_post( $id );
+	if ( ! $sub || 'gc_submission' !== $sub->post_type ) {
+		wp_die( 'Not found', 404 );
+	}
+	$email = get_post_meta( $id, 'gc_email', true );
+	$phone = get_post_meta( $id, 'gc_phone', true );
+	$name  = $sub->post_title;
+	// Clean title if it has form label
+	$name = preg_replace( '/\s*—\s*.*$/', '', $name );
+	$name = trim( $name ) ?: 'Mentor';
+	$mentor_id = wp_insert_post( array(
+		'post_type'    => 'gc_mentor',
+		'post_status'  => 'publish',
+		'post_title'   => $name,
+		'post_content' => $sub->post_content,
+	) );
+	if ( $mentor_id && ! is_wp_error( $mentor_id ) ) {
+		update_post_meta( $mentor_id, 'gc_email', $email );
+		update_post_meta( $mentor_id, 'gc_phone', $phone );
+		update_post_meta( $mentor_id, 'gc_from_submission', $id );
+		update_post_meta( $id, 'gc_workflow_status', 'approved_mentor' );
+		update_post_meta( $id, 'gc_mentor_post_id', $mentor_id );
+		if ( is_email( $email ) ) {
+			$from = apply_filters( 'wp_mail_from', 'hello@' . ( wp_parse_url( home_url(), PHP_URL_HOST ) ?: 'gamechangersnigeria.org' ) );
+			$mentors_url = function_exists( 'gc_page_url' ) ? gc_page_url( 'mentors' ) : home_url( '/mentors/' );
+			wp_mail(
+				$email,
+				'You are now listed as a Game Changers mentor',
+				"Hello {$name},\n\nYour mentorship application was approved. Your profile is now public on the Mentors page:\n{$mentors_url}\n\n— Game Changers Nigeria",
+				array( 'From: Game Changers Nigeria <' . $from . '>' )
+			);
+		}
+	}
+	wp_safe_redirect( admin_url( 'edit.php?post_type=gc_mentor&gc_mentor_approved=1' ) );
+	exit;
+}
+add_action( 'admin_post_gc_approve_mentor', 'gc_admin_approve_mentor' );
+
+/** Mentors management notice + approve links on submissions list */
+function gc_mentor_submission_row_actions( $actions, $post ) {
+	if ( 'gc_submission' !== $post->post_type ) {
+		return $actions;
+	}
+	$label = strtolower( (string) get_post_meta( $post->ID, 'gc_form_type_label', true ) );
+	$status = get_post_meta( $post->ID, 'gc_workflow_status', true );
+	if ( false === strpos( $label, 'mentor' ) ) {
+		return $actions;
+	}
+	if ( 'approved_mentor' === $status ) {
+		$actions['gc_mentor_done'] = '<span style="color:green;">Mentor published</span>';
+		return $actions;
+	}
+	$url = wp_nonce_url(
+		admin_url( 'admin-post.php?action=gc_approve_mentor&submission_id=' . (int) $post->ID ),
+		'gc_approve_mentor'
+	);
+	$actions['gc_approve_mentor'] = '<a href="' . esc_url( $url ) . '" style="color:#006b3f;font-weight:700;">Approve → show on Mentors page</a>';
+	return $actions;
+}
+add_filter( 'post_row_actions', 'gc_mentor_submission_row_actions', 10, 2 );

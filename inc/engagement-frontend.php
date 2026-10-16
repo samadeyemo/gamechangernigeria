@@ -33,137 +33,218 @@ function gc_ajax_complete_activity() {
 add_action( 'wp_ajax_gc_complete_activity', 'gc_ajax_complete_activity' );
 
 function gc_render_today_block() {
-	$challenge     = gc_get_todays_challenge();
-	$lesson        = gc_get_todays_lesson();
+	$challenge = function_exists( 'gc_get_todays_challenge' ) ? gc_get_todays_challenge() : null;
+	$lesson    = function_exists( 'gc_get_todays_lesson' ) ? gc_get_todays_lesson() : null;
 	if ( function_exists( 'gc_free_nugget_as_lesson_fallback' ) ) {
 		$lesson = gc_free_nugget_as_lesson_fallback( $lesson );
 	}
-	$logged_in     = is_user_logged_in();
-	$uid           = get_current_user_id();
-	$lesson_done   = $logged_in && gc_has_completed_today( $uid, 'daily_lesson' );
-	$challenge_done = $logged_in && gc_has_completed_today( $uid, 'daily_challenge' );
-
-	$free_join = function_exists( 'gc_page_url' ) ? gc_page_url( 'join-free' ) : home_url( '/join-free/' );
-	$premium   = function_exists( 'gc_page_url' ) ? gc_page_url( 'become-a-member' ) : home_url( '/become-a-member/' );
-	$ebook     = function_exists( 'gc_page_url' ) ? gc_page_url( 'free-ebook' ) : home_url( '/free-ebook/' );
-	$is_premium_member = $logged_in && function_exists( 'gc_user_is_premium' ) && gc_user_is_premium( $uid );
-	$is_free_member    = $logged_in && ! $is_premium_member;
+	$logged_in      = is_user_logged_in();
+	$uid            = get_current_user_id();
+	$lesson_done    = $logged_in && function_exists( 'gc_has_completed_today' ) && gc_has_completed_today( $uid, 'daily_lesson' );
+	$challenge_done = $logged_in && function_exists( 'gc_has_completed_today' ) && gc_has_completed_today( $uid, 'daily_challenge' );
+	$ebook          = function_exists( 'gc_page_url' ) ? gc_page_url( 'free-ebook' ) : home_url( '/free-ebook/' );
+	$is_premium     = $logged_in && function_exists( 'gc_user_is_premium' ) && gc_user_is_premium( $uid );
 
 	ob_start();
 	?>
-	<div class="gc-hub-section-head"><div><span class="gc-kicker"><?php esc_html_e( 'Daily nuggets', 'game-changers' ); ?></span><h2><?php esc_html_e( "Today's Game Changer", 'game-changers' ); ?></h2></div>
-		<?php if ( $is_free_member || ! $logged_in ) : ?>
-		<p style="margin:8px 0 0;color:var(--gc-muted,#66756a);max-width:52ch;"><?php esc_html_e( 'Free path: 7-day activation ebook → 30-day short nuggets. Come back daily.', 'game-changers' ); ?>
-			<a href="<?php echo esc_url( $ebook ); ?>"><?php esc_html_e( 'Get the ebook', 'game-changers' ); ?></a>
-		</p>
-		<?php else : ?>
-		<p style="margin:8px 0 0;color:var(--gc-muted,#66756a);max-width:52ch;"><?php esc_html_e( 'Your daily practice — complete today’s nugget and challenge to keep your streak.', 'game-changers' ); ?></p>
-		<?php endif; ?>
-	</div>
-	<div class="gc-hub-grid three">
-		<article class="gc-hub-card">
-			<span class="gc-card-num"><?php esc_html_e( '30-DAY SHORT NUGGET · 5 MIN · 5 PTS', 'game-changers' ); ?></span>
-			<?php if ( $lesson ) : ?>
-				<h3><?php echo esc_html( get_the_title( $lesson ) ); ?></h3>
-				<p><?php echo wp_kses_post( wpautop( $lesson->post_content ) ); ?></p>
-				<?php if ( ! $logged_in ) : ?>
-					<strong><a class="gc-text-link" href="<?php echo esc_url( wp_login_url( get_permalink() ) ); ?>">Log in to mark complete →</a></strong>
-				<?php elseif ( $lesson_done ) : ?>
-					<span class="gc-card-status">✓ Completed today</span>
-				<?php else : ?>
-					<button type="button" class="gc-button gc-button-light gc-complete-btn" data-activity-type="daily_lesson" data-content-id="<?php echo esc_attr( $lesson->ID ); ?>" data-source="member_hub_today">Mark Complete</button>
-				<?php endif; ?>
-			<?php else : ?>
-				<h3>Preparing today's lesson…</h3>
-				<p>Check back shortly — a new 5-minute lesson is on its way.</p>
-			<?php endif; ?>
-		</article>
-		<article class="gc-hub-card">
-			<span class="gc-card-num">ACT · TODAY'S CHALLENGE</span>
+	<div class="gc-today-wrap" id="gc-daily-practice">
+		<div class="gc-hub-section-head">
+			<div>
+				<span class="gc-kicker"><?php esc_html_e( 'Daily practice', 'game-changers' ); ?></span>
+				<h2><?php esc_html_e( "Today's Game Changer", 'game-changers' ); ?></h2>
+				<p class="gc-today-lead"><?php esc_html_e( 'Complete the challenge and the short nugget below. Only Mark Complete awards points — reading alone does not.', 'game-changers' ); ?></p>
+			</div>
+		</div>
+
+		<!-- DAILY CHALLENGE — primary, always visible -->
+		<article class="gc-today-challenge <?php echo $challenge_done ? 'is-done' : ''; ?>">
+			<div class="gc-today-challenge-label">
+				<span><?php esc_html_e( 'Daily challenge', 'game-changers' ); ?></span>
+				<?php if ( $challenge_done ) : ?><em>✓ <?php esc_html_e( 'Done today', 'game-changers' ); ?></em><?php endif; ?>
+			</div>
 			<?php if ( $challenge ) : ?>
 				<h3><?php echo esc_html( get_the_title( $challenge ) ); ?></h3>
-				<p><?php echo wp_kses_post( wpautop( $challenge->post_content ) ); ?></p>
+				<div class="gc-today-body"><?php echo wp_kses_post( wpautop( $challenge->post_content ) ); ?></div>
 				<?php if ( ! $logged_in ) : ?>
-					<strong><a class="gc-text-link" href="<?php echo esc_url( wp_login_url( get_permalink() ) ); ?>">Log in to mark complete →</a></strong>
+					<a class="gc-button gc-button-gold" href="<?php echo esc_url( wp_login_url( get_permalink() ) ); ?>"><?php esc_html_e( 'Log in to complete', 'game-changers' ); ?></a>
 				<?php elseif ( $challenge_done ) : ?>
-					<span class="gc-card-status">✓ Completed today</span>
+					<span class="gc-card-status">✓ <?php esc_html_e( 'Challenge completed — points counted', 'game-changers' ); ?></span>
 				<?php else : ?>
-					<button type="button" class="gc-button gc-button-light gc-complete-btn" data-activity-type="daily_challenge" data-content-id="<?php echo esc_attr( $challenge->ID ); ?>" data-source="member_hub_today">Mark Complete</button>
+					<button type="button" class="gc-button gc-button-gold gc-complete-btn"
+						data-activity-type="daily_challenge"
+						data-content-id="<?php echo esc_attr( $challenge->ID ); ?>"
+						data-source="member_hub_today"><?php esc_html_e( 'Mark challenge complete', 'game-changers' ); ?></button>
 				<?php endif; ?>
 			<?php else : ?>
-				<h3>Preparing today's challenge…</h3>
-				<p>Check back shortly — a new challenge is on its way.</p>
+				<h3><?php esc_html_e( 'No challenge published for today', 'game-changers' ); ?></h3>
+				<p><?php esc_html_e( 'Admin: add items under Challenges in WP Admin. Until then, use lessons below.', 'game-changers' ); ?></p>
 			<?php endif; ?>
 		</article>
-		<article class="gc-hub-card">
-			<span class="gc-card-num">DISCOVER</span>
-			<?php
-			$opportunity = get_posts( array( 'post_type' => 'gc_opportunity', 'post_status' => 'publish', 'posts_per_page' => 1, 'orderby' => 'rand' ) );
-			if ( ! empty( $opportunity ) ) :
-				?>
-				<h3><?php echo esc_html( get_the_title( $opportunity[0] ) ); ?></h3>
-				<p><?php echo esc_html( wp_trim_words( wp_strip_all_tags( $opportunity[0]->post_content ), 20 ) ); ?></p>
-				<strong><a class="gc-text-link" href="<?php echo esc_url( get_permalink( $opportunity[0] ) ); ?>">View opportunity →</a></strong>
-			<?php else : ?>
-				<h3>Explore opportunities</h3>
-				<p>Jobs, training and grants curated for the Game Changers community.</p>
-				<strong><a class="gc-text-link" href="<?php echo esc_url( home_url( '/opportunities/' ) ); ?>">Browse opportunities →</a></strong>
-			<?php endif; ?>
-		</article>
-	</div>
 
-	<?php if ( $is_free_member || ! $logged_in ) : ?>
-	<aside class="gc-hub-card gc-free-premium-upsell" style="margin-top:22px;background:linear-gradient(165deg,#0a1a10,#163022);color:#f5f2ec;border:0;">
-		<span class="gc-card-num" style="color:#e8b840;"><?php esc_html_e( 'PREMIUM MEMBERSHIP', 'game-changers' ); ?></span>
-		<h3 style="color:#fff;"><?php esc_html_e( 'Benefits beyond daily practice', 'game-changers' ); ?></h3>
-		<p style="opacity:.9;"><?php esc_html_e( 'Daily nuggets build the habit. Premium is for members who want deeper mentorship tools — and room to learn new things beyond leadership.', 'game-changers' ); ?></p>
-		<ul style="margin:0 0 14px;padding-left:18px;line-height:1.85;opacity:.95;">
-			<li><?php esc_html_e( 'Game Changers books and manuals', 'game-changers' ); ?></li>
-			<li><?php esc_html_e( 'Leadership badges', 'game-changers' ); ?></li>
-			<li><?php esc_html_e( 'Game Changers badges', 'game-changers' ); ?></li>
-			<li><?php esc_html_e( 'Referral bonuses', 'game-changers' ); ?></li>
-			<li><?php esc_html_e( '2-year leadership growth tool', 'game-changers' ); ?></li>
-			<li><?php esc_html_e( 'Mentorship pathways to learn beyond leadership', 'game-changers' ); ?></li>
-		</ul>
-		<p style="margin:0;display:flex;flex-wrap:wrap;gap:12px;">
-			<a class="gc-button gc-button-gold" href="<?php echo esc_url( $premium ); ?>"><?php esc_html_e( 'Explore Premium', 'game-changers' ); ?></a>
-			<?php if ( ! $logged_in ) : ?>
-				<a class="gc-text-link" style="color:#e8b840;" href="<?php echo esc_url( $free_join ); ?>"><?php esc_html_e( 'Start free membership →', 'game-changers' ); ?></a>
-			<?php endif; ?>
-		</p>
-	</aside>
-	<?php endif; ?>
+		<div class="gc-today-secondary">
+			<article class="gc-hub-card">
+				<span class="gc-card-num"><?php esc_html_e( 'SHORT NUGGET · 5 PTS', 'game-changers' ); ?></span>
+				<?php if ( $lesson ) : ?>
+					<h3><?php echo esc_html( get_the_title( $lesson ) ); ?></h3>
+					<div class="gc-today-body"><?php echo wp_kses_post( wpautop( $lesson->post_content ) ); ?></div>
+					<?php if ( ! $logged_in ) : ?>
+						<a class="gc-text-link" href="<?php echo esc_url( wp_login_url( get_permalink() ) ); ?>"><?php esc_html_e( 'Log in to mark complete →', 'game-changers' ); ?></a>
+					<?php elseif ( $lesson_done ) : ?>
+						<span class="gc-card-status">✓ <?php esc_html_e( 'Completed today', 'game-changers' ); ?></span>
+					<?php else : ?>
+						<button type="button" class="gc-button gc-button-light gc-complete-btn"
+							data-activity-type="daily_lesson"
+							data-content-id="<?php echo esc_attr( $lesson->ID ); ?>"
+							data-source="member_hub_today"><?php esc_html_e( 'Mark nugget complete', 'game-changers' ); ?></button>
+					<?php endif; ?>
+				<?php else : ?>
+					<h3><?php esc_html_e( 'Preparing today’s nugget…', 'game-changers' ); ?></h3>
+					<p><?php if ( ! $is_premium ) : ?><a href="<?php echo esc_url( $ebook ); ?>"><?php esc_html_e( 'Get the free ebook', 'game-changers' ); ?></a><?php endif; ?></p>
+				<?php endif; ?>
+			</article>
+		</div>
+	</div>
+	<style>
+	.gc-today-wrap{margin:0 0 32px}
+	.gc-today-lead{margin:8px 0 0;color:var(--gc-muted,#66756a);max-width:54ch;font-size:14px;line-height:1.55}
+	.gc-today-challenge{background:linear-gradient(165deg,#0a1a10,#163022);color:#f5f2ec;border-radius:18px;padding:22px 20px 20px;margin:16px 0 14px}
+	.gc-today-challenge.is-done{opacity:.92}
+	.gc-today-challenge-label{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+	.gc-today-challenge-label span{font:700 11px/1 'Space Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#e8b840}
+	.gc-today-challenge-label em{font-style:normal;font-size:12px;opacity:.85}
+	.gc-today-challenge h3{font:700 clamp(20px,2.8vw,26px)/1.2 'Playfair Display',serif;margin:0 0 10px;color:#fff}
+	.gc-today-body{font-size:14.5px;line-height:1.6;opacity:.92;margin:0 0 16px}
+	.gc-today-body p:last-child{margin-bottom:0}
+	.gc-today-secondary{display:grid;grid-template-columns:1fr;gap:12px}
+	@media(min-width:720px){.gc-today-secondary{grid-template-columns:1fr}}
+	</style>
 	<?php
 	return ob_get_clean();
 }
+
 add_shortcode( 'gc_today', 'gc_render_today_block' );
 
 function gc_render_member_growth_block() {
 	if ( ! is_user_logged_in() ) {
 		return '';
 	}
-	$progress      = gc_member_progress( get_current_user_id() );
+	$uid = get_current_user_id();
+	if ( function_exists( 'gc_backfill_points_breakdown' ) ) {
+		gc_backfill_points_breakdown( $uid );
+	}
+	if ( function_exists( 'gc_ensure_fifteen_badges' ) ) {
+		gc_ensure_fifteen_badges();
+	}
+	$progress = function_exists( 'gc_member_progress' ) ? gc_member_progress( $uid ) : array();
 	$badges_config = get_option( 'gc_badges_config', array() );
+	if ( ! is_array( $badges_config ) ) {
+		$badges_config = array();
+	}
+
+	$tier_pts      = (int) get_user_meta( $uid, 'gc_tier_points', true );
+	if ( function_exists( 'gc_rebuild_challenge_points_from_ledger' ) ) {
+		gc_rebuild_challenge_points_from_ledger( $uid );
+	}
+	$challenge_pts = (int) get_user_meta( $uid, 'gc_challenge_points', true );
+	$ref_pts       = (int) get_user_meta( $uid, 'gc_referral_points', true );
+	$l2_pts        = (int) get_user_meta( $uid, 'gc_referral_l2_points', true );
+	$total_pts     = (int) get_user_meta( $uid, 'gc_total_points', true );
+	if ( $total_pts < 1 ) {
+		$total_pts = (int) ( $progress['points'] ?? 0 );
+	}
+	$streak  = (int) ( $progress['streak_current'] ?? get_user_meta( $uid, 'gc_streak_current', true ) );
+	$level   = $progress['level'] ?? 'New Game Changer';
+	$earned  = isset( $progress['badges'] ) && is_array( $progress['badges'] ) ? $progress['badges'] : array();
+	$my_tier = function_exists( 'gc_user_membership_tier' ) ? (int) gc_user_membership_tier( $uid ) : (int) get_user_meta( $uid, 'gc_premium_tier', true );
+	$badges_config = get_option( 'gc_badges_config', array() );
+	if ( ! is_array( $badges_config ) ) { $badges_config = array(); }
+	$earned_count = 0;
+	foreach ( $badges_config as $b ) {
+		$s = $b['slug'] ?? '';
+		if ( $s && isset( $earned[ $s ] ) ) { $earned_count++; }
+	}
+	$badge_total = count( $badges_config );
+	$other_pts = max( 0, $total_pts - $tier_pts - $challenge_pts - $ref_pts - $l2_pts );
+
+
 	ob_start();
 	?>
-	<div class="gc-hub-progress-card" data-gc-growth>
-		<div><span class="gc-kicker">Your growth</span><h2><?php echo esc_html( $progress['level'] ); ?></h2><p><?php echo esc_html( $progress['points'] ); ?> points · <?php echo esc_html( $progress['streak_current'] ); ?>-day streak</p></div>
-	</div>
-	<div class="gc-hub-stats">
-		<div><strong><?php echo esc_html( $progress['points'] ); ?></strong><span>Points</span></div>
-		<div><strong><?php echo esc_html( $progress['streak_current'] ); ?></strong><span>Day Streak</span></div>
-		<div><strong><?php echo esc_html( $progress['streak_longest'] ); ?></strong><span>Longest Streak</span></div>
-		<div><strong><?php echo esc_html( count( $progress['badges'] ) ); ?></strong><span>Badges Earned</span></div>
-	</div>
-	<div class="gc-badge-row">
-		<?php foreach ( $badges_config as $badge ) : $earned = isset( $progress['badges'][ $badge['slug'] ] ); ?>
-			<span class="gc-badge-chip <?php echo $earned ? 'is-earned' : 'is-locked'; ?>"><?php echo $earned ? '🏆 ' : ''; ?><?php echo esc_html( $badge['label'] ); ?></span>
-		<?php endforeach; ?>
+	<div class="gc-growth-panel" data-gc-growth>
+		<div class="gc-growth-head">
+			<span class="gc-kicker">Your growth</span>
+			<h2><?php echo esc_html( $level ); ?></h2>
+			<p><?php echo esc_html( number_format_i18n( $total_pts ) ); ?> total · <?php echo esc_html( $streak ); ?>-day streak · Tier <?php echo (int) $my_tier; ?></p>
+		</div>
+		<div class="gc-growth-score">
+			<span>Total</span>
+			<strong><?php echo esc_html( number_format_i18n( $total_pts ) ); ?></strong>
+		</div>
+		<div class="gc-growth-breakdown">
+			<div>
+				<span>Tier points</span>
+				<strong><?php echo esc_html( number_format_i18n( $tier_pts ) ); ?></strong>
+				<small>From your membership level</small>
+			</div>
+			<div class="gc-pts-chal">
+				<span>Challenge points</span>
+				<strong><?php echo esc_html( number_format_i18n( $challenge_pts ) ); ?></strong>
+				<small>Daily challenges only</small>
+			</div>
+			<div class="gc-pts-ref">
+				<span>Referral points</span>
+				<strong><?php echo esc_html( number_format_i18n( $ref_pts ) ); ?></strong>
+				<small>People you invited (1/3)</small>
+			</div>
+			<div class="gc-pts-net">
+				<span>Network points</span>
+				<strong><?php echo esc_html( number_format_i18n( $l2_pts ) ); ?></strong>
+				<small>Their referrals (1/5)</small>
+			</div>
+		</div>
+		<?php if ( $other_pts > 0 ) : ?>
+		<div class="gc-growth-other" style="margin:12px 0 8px;font-size:13px;opacity:.85">
+			Other activity points: <strong><?php echo esc_html( number_format_i18n( $other_pts ) ); ?></strong>
+			<span style="opacity:.7"> (lessons, events, etc. — not challenge/referral)</span>
+		</div>
+		<?php endif; ?>
+		<div class="gc-badge-head" style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 10px;gap:12px;flex-wrap:wrap">
+			<span class="gc-kicker" style="margin:0">Badges</span>
+			<strong style="color:#e8b840;font-size:14px"><?php echo (int) $earned_count; ?> / <?php echo (int) $badge_total; ?> earned</strong>
+		</div>
+		<div class="gc-badge-row" aria-label="Badges in order 1 to 15">
+			<?php
+			$i = 0;
+			foreach ( $badges_config as $badge ) :
+				$i++;
+				$slug  = isset( $badge['slug'] ) ? $badge['slug'] : '';
+				$label = isset( $badge['label'] ) ? $badge['label'] : $slug;
+				$is_on = $slug && ! empty( $earned[ $slug ] );
+				?>
+				<span class="gc-badge-chip <?php echo $is_on ? 'is-earned' : 'is-locked'; ?>">
+					<span class="gc-badge-num"><?php echo (int) $i; ?></span>
+					<?php echo $is_on ? '✓ ' : ''; ?><?php echo esc_html( $label ); ?>
+				</span>
+			<?php endforeach; ?>
+		</div>
 	</div>
 	<style>
-	.gc-badge-row{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 50px}
-	.gc-badge-chip{font:700 10px 'Space Mono',monospace;letter-spacing:.04em;padding:8px 14px;border-radius:999px;border:1px solid var(--gc-line);color:var(--gc-muted)}
-	.gc-badge-chip.is-earned{background:var(--gc-green);border-color:var(--gc-green);color:#fff}
+	.gc-growth-panel{background:#0d1a0f;color:#f5f2ec;border-radius:18px;padding:24px 22px 20px;margin:0 0 28px}
+	.gc-growth-head .gc-kicker{color:#e8b840}
+	.gc-growth-head h2{font:900 clamp(26px,3.5vw,34px)/1.15 'Playfair Display',serif;margin:8px 0 6px;color:#fff}
+	.gc-growth-head p{margin:0 0 18px;opacity:.75;font-size:14px}
+	.gc-growth-score{display:flex;align-items:baseline;justify-content:space-between;padding:12px 0 16px;border-bottom:1px solid rgba(245,242,236,.12);margin-bottom:14px}
+	.gc-growth-score span{font:700 10px/1 'Space Mono',monospace;letter-spacing:.12em;text-transform:uppercase;opacity:.65}
+	.gc-growth-score strong{font:900 36px/1 'Playfair Display',serif;color:#e8c547}
+	.gc-growth-breakdown{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+	.gc-growth-breakdown div{background:rgba(255,255,255,.05);border:1px solid rgba(245,242,236,.1);border-radius:12px;padding:12px 12px 14px}
+	.gc-growth-breakdown span{display:block;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.65;margin-bottom:6px}
+	.gc-growth-breakdown strong{display:block;font-size:20px;font-weight:800;margin-bottom:4px}
+	.gc-growth-breakdown small{font-size:11px;opacity:.55;line-height:1.3}
+	.gc-badge-row{display:flex;flex-wrap:wrap;gap:8px}
+	.gc-badge-chip{font:700 10px 'Space Mono',monospace;letter-spacing:.03em;padding:7px 12px;border-radius:999px;border:1px solid rgba(245,242,236,.15);color:rgba(245,242,236,.55);display:inline-flex;align-items:center;gap:5px}
+	.gc-badge-chip .gc-badge-num{opacity:.5;font-size:9px}
+	.gc-badge-chip.is-earned{background:#006b3f;border-color:#006b3f;color:#fff}
+	@media(max-width:720px){.gc-growth-breakdown{grid-template-columns:1fr 1fr}}
 	</style>
 	<?php
 	return ob_get_clean();

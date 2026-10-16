@@ -37,3 +37,25 @@ add_action("admin_init", function(){
   }
   update_option("gc_join_free_inner_v1","1");
 }, 42);
+
+
+add_action( 'admin_init', function () {
+	if ( get_option( 'gc_payment_help_page_v1' ) === '1' ) {
+		return;
+	}
+	$p = get_page_by_path( 'payment-help' );
+	if ( ! $p ) {
+		$id = wp_insert_post( array(
+			'post_type'   => 'page',
+			'post_title'  => 'Payment & Account Help',
+			'post_name'   => 'payment-help',
+			'post_status' => 'publish',
+		) );
+		if ( $id && ! is_wp_error( $id ) ) {
+			update_post_meta( $id, '_wp_page_template', 'page-payment-help.php' );
+		}
+	} else {
+		update_post_meta( $p->ID, '_wp_page_template', 'page-payment-help.php' );
+	}
+	update_option( 'gc_payment_help_page_v1', '1' );
+}, 40 );

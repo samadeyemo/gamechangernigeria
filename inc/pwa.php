@@ -1,6 +1,6 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) { exit; }
-define( 'GC_DISABLE_INSTALL_APP', true );
+define( 'GC_DISABLE_INSTALL_APP', false );
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 /**
  * Makes the site installable as an app on mobile and desktop (Chrome,
@@ -68,7 +68,7 @@ add_action( 'template_redirect', function () {
 		header( 'Service-Worker-Allowed: /' );
 		$offline_url = gc_page_url( 'offline' );
 		?>
-const GC_CACHE = 'gc-cache-v1';
+const GC_CACHE = 'gc-pwa-v2111';
 const GC_OFFLINE_URL = <?php echo wp_json_encode( $offline_url ); ?>;
 
 self.addEventListener('install', (event) => {
@@ -192,10 +192,20 @@ add_action( 'wp_footer', function () {
 		var installBtn = document.getElementById('gc-install-app-btn');
 		var dismissBtn = document.getElementById('gc-install-dismiss-btn');
 		var DISMISS_KEY = 'gc_install_dismissed';
+		var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+		var isAndroid = /android/i.test(navigator.userAgent);
 
-		function showBanner() {
+		function showBanner(mode) {
 			if (isStandalone || localStorage.getItem(DISMISS_KEY)) { return; }
-			if (banner) { banner.hidden = false; }
+			if (!banner) return;
+			banner.hidden = false;
+			var copy = banner.querySelector('.gc-install-banner-copy span');
+			if (mode === 'ios' && copy) {
+				copy.textContent = 'On iPhone/iPad: tap Share → Add to Home Screen.';
+				if (installBtn) installBtn.textContent = 'How to install';
+			} else if (mode === 'manual' && copy) {
+				copy.textContent = 'Use your browser menu → Install app / Add to Home screen.';
+			}
 		}
 		function hideBanner() {
 			if (banner) { banner.hidden = true; }
@@ -204,14 +214,33 @@ add_action( 'wp_footer', function () {
 		window.addEventListener('beforeinstallprompt', function (e) {
 			e.preventDefault();
 			deferredPrompt = e;
-			showBanner();
+			showBanner('chrome');
 		});
+
+		// iOS never fires beforeinstallprompt — show instructions after short delay
+		if (isIOS && !isStandalone) {
+			setTimeout(function () { showBanner('ios'); }, 2500);
+		}
+		// Android without prompt yet (criteria not met) — still offer manual tip
+		if (isAndroid && !isStandalone) {
+			setTimeout(function () {
+				if (!deferredPrompt) showBanner('manual');
+			}, 4000);
+		}
+
 		if (installBtn) {
 			installBtn.addEventListener('click', function () {
-				hideBanner();
-				if (!deferredPrompt) { return; }
-				deferredPrompt.prompt();
-				deferredPrompt.userChoice.finally(function () { deferredPrompt = null; });
+				if (deferredPrompt) {
+					hideBanner();
+					deferredPrompt.prompt();
+					deferredPrompt.userChoice.finally(function () { deferredPrompt = null; });
+					return;
+				}
+				if (isIOS) {
+					alert('Install on iPhone/iPad:\\n1. Tap the Share button\\n2. Scroll and tap “Add to Home Screen”\\n3. Tap Add');
+					return;
+				}
+				alert('Open your browser menu and choose “Install app” or “Add to Home screen”.');
 			});
 		}
 		if (dismissBtn) {
@@ -256,12 +285,4 @@ add_action( 'admin_init', function () {
 	}
 } );
 
-/* Hide install app UI completely */
-add_action( 'wp_head', function () {
-	if ( ! defined( 'GC_DISABLE_INSTALL_APP' ) || ! GC_DISABLE_INSTALL_APP ) return;
-	echo '<style id="gc-hide-install">#gc-install-app-btn,.gc-install-prompt,.gc-pwa-install,[data-gc-install],.gc-install-banner{display:none!important;visibility:hidden!important;pointer-events:none!important}</style>';
-}, 99 );
-add_action( 'wp_footer', function () {
-	if ( ! defined( 'GC_DISABLE_INSTALL_APP' ) || ! GC_DISABLE_INSTALL_APP ) return;
-	echo '<script>try{document.querySelectorAll("#gc-install-app-btn,.gc-install-prompt,[data-gc-install]").forEach(function(el){el.remove();});}catch(e){}</script>';
-}, 99 );
+

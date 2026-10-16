@@ -20,8 +20,27 @@ $selected = absint( $_GET['tier'] ?? 0 );
 $ref      = sanitize_text_field( wp_unslash( $_GET['ref'] ?? '' ) );
 $err      = sanitize_key( $_GET['gc_err'] ?? '' );
 $prefill_email = '';
-$paid_data = $ref ? get_transient( 'gc_paid_' . md5( $ref ) ) : false;
+$paid_data = $ref ? ( function_exists( 'gc_get_paid_unlock' ) ? gc_get_paid_unlock( $ref ) : get_transient( 'gc_paid_' . md5( $ref ) ) ) : false;
 $paid = ( isset( $_GET['paid'] ) && '1' === $_GET['paid'] && is_array( $paid_data ) );
+
+/* After admin bank approval: resume by email (no short-lived link required) */
+if ( ! $paid && ! empty( $_GET['gc_resume'] ) ) {
+	$re = sanitize_email( wp_unslash( $_GET['gc_resume_email'] ?? '' ) );
+	if ( is_email( $re ) ) {
+		$by = get_option( 'gc_paid_email_' . md5( strtolower( $re ) ), false );
+		if ( is_array( $by ) && ! empty( $by['ref'] ) ) {
+			$paid_data = $by;
+			$ref       = (string) $by['ref'];
+			$paid      = true;
+			$prefill_email = $re;
+			if ( ! empty( $by['tier'] ) ) {
+				$selected = absint( $by['tier'] );
+			}
+		} else {
+			$err = 'payment';
+		}
+	}
+}
 
 if ( is_array( $paid_data ) ) {
 	if ( ! empty( $paid_data['tier'] ) ) {
@@ -51,7 +70,15 @@ $err_msgs = array(
 	'payment' => 'Payment could not be verified.',
 	'exists' => 'That email is already registered. Log in instead.',
 	'pass' => 'Password must be at least 8 characters.',
+	'ref_required' => 'Paystack reference is required. Copy it from your Paystack receipt or email.',
+	'not_paid' => 'Paystack could not confirm that payment. Check the reference and try again.',
+	'verify_fail' => 'Could not reach Paystack to verify. Try again in a moment.',
+	'email_mismatch' => 'The email must match the email used on Paystack for this payment.',
+	'ref_used' => 'This Paystack reference was already used to register.',
+	'paystack_config' => 'Payment verification is not configured. Contact the team or use an admin invite code.',
 );
+$pending_receipt = isset( $_GET['gc_pending'] ) && '1' === $_GET['gc_pending'];
+
 ?>
 <main class="gc-join-page">
 	<section class="gc-join-hero">
@@ -66,6 +93,13 @@ $err_msgs = array(
 		<div class="gc-container">
 			<?php if ( $err && isset( $err_msgs[ $err ] ) ) : ?>
 				<div class="gc-join-err" style="max-width:480px;margin:0 auto 20px;background:#fff3f0;border:1px solid #f0c0b0;padding:12px 16px;border-radius:10px;color:#8b2e1a;"><?php echo esc_html( $err_msgs[ $err ] ); ?></div>
+			<?php endif; ?>
+
+			<?php if ( ! empty( $pending_receipt ) ) : ?>
+				<div style="max-width:480px;margin:0 auto 20px;background:#fff8e6;border:1px solid #e8c96a;padding:14px 16px;border-radius:10px;color:#5c4a12;line-height:1.55;">
+					<strong>Receipt received — pending admin review.</strong><br>
+					Registration unlocks only after the team confirms your bank transfer. You will be contacted on the email you submitted. Fake receipts will not be approved.
+				</div>
 			<?php endif; ?>
 
 			<?php if ( $paid && $ref && is_array( $paid_data ) ) : ?>
@@ -127,6 +161,30 @@ $err_msgs = array(
 						?>
 					</div>
 
+					<?php
+					$gc_bank_name   = trim( (string) get_option( 'gc_bank_name', '' ) );
+					$gc_bank_acct   = trim( (string) get_option( 'gc_bank_account_name', '' ) );
+					$gc_bank_number = trim( (string) get_option( 'gc_bank_account_number', '' ) );
+					$has_bank       = ( $gc_bank_name || $gc_bank_acct || $gc_bank_number );
+					?>
+					<div style="margin:18px 0;padding:16px 18px;background:#f0f7f3;border:1px solid rgba(0,107,63,.18);border-radius:12px;">
+						<div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#006b3f;margin-bottom:8px;">Pay by bank transfer</div>
+						<?php if ( $has_bank ) : ?>
+							<p style="margin:0 0 12px;font-size:13px;color:#334;line-height:1.5;">Transfer <strong>₦<?php echo esc_html( number_format_i18n( $price ) ); ?></strong> to the account below, then confirm with your receipt.</p>
+							<dl style="margin:0;display:grid;grid-template-columns:110px 1fr;gap:6px 10px;font-size:14px;">
+								<dt style="color:#66756a;font-weight:600;">Bank</dt>
+								<dd style="margin:0;font-weight:700;"><?php echo esc_html( $gc_bank_name ?: '—' ); ?></dd>
+								<dt style="color:#66756a;font-weight:600;">Account name</dt>
+								<dd style="margin:0;font-weight:700;"><?php echo esc_html( $gc_bank_acct ?: '—' ); ?></dd>
+								<dt style="color:#66756a;font-weight:600;">Account number</dt>
+								<dd style="margin:0;font-weight:800;font-size:16px;letter-spacing:.04em;font-family:ui-monospace,monospace;"><?php echo esc_html( $gc_bank_number ?: '—' ); ?></dd>
+							</dl>
+							<p style="margin:12px 0 0;font-size:12px;color:#66756a;">Use your full name as the transfer narration. Keep the receipt for confirmation below.</p>
+						<?php else : ?>
+							<p style="margin:0;font-size:13px;color:#8b2e1a;line-height:1.5;">Bank details are not configured yet. Admin: set them under <strong>Settings → GC Payments</strong> (Bank name, Account name, Account number).</p>
+						<?php endif; ?>
+					</div>
+
 					<hr style="border:0;border-top:1px solid rgba(13,26,15,.08);margin:22px 0;">
 
 					<h3 style="font-size:15px;margin:0 0 12px;">Confirm your payment</h3>
@@ -143,17 +201,17 @@ $err_msgs = array(
 						<div style="margin-bottom:14px;padding:14px;background:#f8f6f1;border-radius:10px;">
 							<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;">
 								<input type="radio" name="confirm_method" value="paystack_email" checked style="margin-top:3px;">
-								<span><strong>I paid with Paystack</strong><br><span style="font-size:12px;color:#66756a;">Use the same email you paid with above. Optional reference below.</span></span>
+								<span><strong>I paid with Paystack</strong><br><span style="font-size:12px;color:#66756a;">Email must match Paystack. <strong>Reference is required</strong> — we verify it live with Paystack.</span></span>
 							</label>
 							<div style="margin-top:10px;padding-left:24px;">
-								<input type="text" name="pay_ref" placeholder="Paystack reference (optional)" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccd0d4;">
+								<input type="text" name="pay_ref" id="gc-pay-ref" placeholder="Paystack reference" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccd0d4;">
 							</div>
 						</div>
 
 						<div style="margin-bottom:14px;padding:14px;background:#f8f6f1;border-radius:10px;">
 							<label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;">
 								<input type="radio" name="confirm_method" value="receipt" style="margin-top:3px;">
-								<span><strong>I paid by bank transfer</strong><br><span style="font-size:12px;color:#66756a;">Upload your payment receipt (JPG, PNG or PDF)</span></span>
+								<span><strong>I paid by bank transfer</strong><br><span style="font-size:12px;color:#66756a;">Upload receipt — <strong>admin must approve</strong> before registration opens (fake receipts will not unlock access).</span></span>
 							</label>
 							<div style="margin-top:10px;padding-left:24px;">
 								<input type="file" name="receipt" accept="image/*,.pdf" style="width:100%;font-size:13px;">
@@ -170,8 +228,30 @@ $err_msgs = array(
 							</div>
 						</div>
 
-						<button class="gc-button gc-button-gold" type="submit" style="width:100%;">Confirm &amp; continue to registration</button>
+						<button class="gc-button gc-button-gold" type="submit" style="width:100%;">Confirm &amp; continue</button>
 					</form>
+					<form method="get" action="" style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(13,26,15,.08);">
+						<input type="hidden" name="tier" value="<?php echo (int) $selected; ?>">
+						<input type="hidden" name="gc_resume" value="1">
+						<label style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:#66756a;">Approved bank transfer — continue with your payment email</label>
+						<input type="email" name="gc_resume_email" required placeholder="Email on your receipt" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccd0d4;margin-bottom:10px;">
+						<button type="submit" class="gc-button gc-button-green" style="width:100%;">Continue registration</button>
+					</form>
+					<script>
+					(function(){
+						var form = document.getElementById('gc-confirm-form');
+						if (!form) return;
+						form.addEventListener('submit', function(e){
+							var m = form.querySelector('input[name="confirm_method"]:checked');
+							var ref = form.querySelector('#gc-pay-ref');
+							if (m && m.value === 'paystack_email' && ref && (!ref.value || ref.value.trim().length < 6)) {
+								e.preventDefault();
+								alert('Enter your Paystack reference.');
+								ref.focus();
+							}
+						});
+					})();
+					</script>
 				</div>
 
 			<?php else : ?>

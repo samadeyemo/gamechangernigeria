@@ -256,6 +256,9 @@ function gc_handle_join_free() {
 	$user = new WP_User( $user_id );
 	$user->set_role( 'free_member' );
 	update_user_meta( $user_id, 'gc_membership_status', 'free' );
+	if ( function_exists( 'gc_send_member_welcome_email' ) ) {
+		gc_send_member_welcome_email( $email, $name );
+	}
 	if ( $phone ) {
 		update_user_meta( $user_id, 'gc_phone', $phone );
 	}
@@ -264,6 +267,19 @@ function gc_handle_join_free() {
 	}
 	if ( $town ) {
 		update_user_meta( $user_id, 'gc_town', $town );
+	}
+	$refcode = sanitize_text_field( wp_unslash( $_POST['gc_refcode'] ?? $_POST['refcode'] ?? '' ) );
+	if ( $refcode ) {
+		update_user_meta( $user_id, 'gc_referred_by_tag', strtoupper( $refcode ) );
+		// Link to referrer user if tag matches
+		if ( function_exists( 'gc_get_premium_user_by_tag' ) ) {
+			$ref_user = gc_get_premium_user_by_tag( $refcode );
+			if ( $ref_user ) {
+				update_user_meta( $user_id, 'gc_referred_by_user', (int) $ref_user->ID );
+				$cnt = (int) get_user_meta( $ref_user->ID, 'gc_referral_count', true ) + 1;
+				update_user_meta( $ref_user->ID, 'gc_referral_count', $cnt );
+			}
+		}
 	}
 
 	if ( function_exists( 'gc_generate_membership_tag' ) ) {
@@ -285,10 +301,140 @@ function gc_handle_join_free() {
 		}
 	}
 
+	update_user_meta( $user_id, 'gc_free_path_started', current_time( 'Y-m-d' ) );
+	if ( function_exists( 'gc_ensure_referral_tag' ) ) {
+		gc_ensure_referral_tag( $user_id );
+	}
 	wp_set_current_user( $user_id );
 	wp_set_auth_cookie( $user_id, true );
-	wp_safe_redirect( add_query_arg( 'gc_free', 'success', $redirect ) );
+	// Land on Member Hub (free dashboard) — challenges start here.
+	$hub = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard' ) : home_url( '/premium-dashboard/' );
+	wp_safe_redirect( add_query_arg( 'gc_free', 'welcome', $hub ) );
 	exit;
 }
 add_action( 'admin_post_nopriv_gc_submit_join_free', 'gc_handle_join_free' );
 add_action( 'admin_post_gc_submit_join_free', 'gc_handle_join_free' );
+
+
+/**
+ * Track free-member day index (1–30). Starts on first Hub visit after free join.
+ */
+function gc_free_path_day( $user_id = 0 ) {
+	$user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+	if ( ! $user_id ) {
+		return 0;
+	}
+	$start = get_user_meta( $user_id, 'gc_free_path_started', true );
+	if ( ! $start ) {
+		$start = current_time( 'Y-m-d' );
+		update_user_meta( $user_id, 'gc_free_path_started', $start );
+	}
+	$start_ts = strtotime( $start . ' 00:00:00' );
+	$today_ts = strtotime( current_time( 'Y-m-d' ) . ' 00:00:00' );
+	$day = (int) floor( ( $today_ts - $start_ts ) / DAY_IN_SECONDS ) + 1;
+	return max( 1, min( 31, $day ) );
+}
+
+function gc_free_path_should_prompt_upgrade( $user_id = 0 ) {
+	return false;
+}
+
+/** Which reminder day is active (for messaging). */
+function gc_free_path_prompt_day( $user_id = 0 ) {
+	$day = gc_free_path_day( $user_id );
+	if ( in_array( $day, array( 15, 20, 25, 28 ), true ) ) {
+		return $day;
+	}
+	return $day >= 30 ? $day : 0;
+}
+
+/**
+ * Popup HTML for free members at/after day 30.
+ */
+function gc_render_free_upgrade_modal() {
+	if ( ! is_user_logged_in() || ! gc_free_path_should_prompt_upgrade() ) {
+		return '';
+	}
+	$upgrade = function_exists( 'gc_page_url' ) ? gc_page_url( 'become-a-member' ) : home_url( '/become-a-member/' );
+	$inner   = function_exists( 'gc_page_url' ) ? gc_page_url( 'inner-circle' ) : home_url( '/inner-circle/' );
+	$day     = function_exists( 'gc_free_path_prompt_day' ) ? gc_free_path_prompt_day() : gc_free_path_day();
+	$left    = max( 0, 30 - (int) gc_free_path_day() );
+	ob_start();
+	?>
+	<div id="gc-free-upgrade-modal" class="gc-free-modal" role="dialog" aria-modal="true" aria-labelledby="gc-free-upgrade-title">
+		<div class="gc-free-modal-card">
+			<span class="gc-kicker"><?php echo (int) $day >= 30 ? esc_html__( 'Free path ending', 'game-changers' ) : esc_html__( 'Upgrade reminder', 'game-changers' ); ?></span>
+			<h2 id="gc-free-upgrade-title"><?php esc_html_e( 'Upgrade to a higher tier to keep these benefits', 'game-changers' ); ?></h2>
+			<p><?php
+			if ( (int) $day >= 30 ) {
+				esc_html_e( 'You have reached the end of the free 30-day challenge path. Upgrade to unlock full tier lessons, ongoing challenges, badges, and referral rewards.', 'game-changers' );
+			} else {
+				printf(
+					/* translators: 1: day number 2: days left */
+					esc_html__( 'You are on day %1$d of your free path (%2$d days left). Upgrade now to enjoy full tier lessons, continued challenges, and member benefits without interruption.', 'game-changers' ),
+					(int) $day,
+					(int) $left
+				);
+			}
+			?></p>
+			<div class="gc-free-modal-actions">
+				<a class="gc-button gc-button-gold" href="<?php echo esc_url( $upgrade ); ?>"><?php esc_html_e( 'View tiers & upgrade', 'game-changers' ); ?></a>
+				<a class="gc-button gc-button-light" href="<?php echo esc_url( $inner ); ?>"><?php esc_html_e( 'Join Inner Circle', 'game-changers' ); ?></a>
+				<button type="button" class="gc-button gc-button-light" id="gc-free-modal-close"><?php esc_html_e( 'Not now', 'game-changers' ); ?></button>
+			</div>
+		</div>
+	</div>
+	<style>
+	.gc-free-modal{position:fixed;inset:0;z-index:99999;background:rgba(13,26,15,.72);display:flex;align-items:center;justify-content:center;padding:20px}
+	.gc-free-modal-card{background:#fff;border-radius:18px;padding:28px 24px;max-width:440px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.25)}
+	.gc-free-modal-card h2{font:700 22px/1.25 'Playfair Display',serif;margin:10px 0 12px}
+	.gc-free-modal-card p{color:#66756a;font-size:14px;line-height:1.55;margin:0 0 18px}
+	.gc-free-modal-actions{display:flex;flex-wrap:wrap;gap:10px}
+	.gc-free-modal.is-hidden{display:none}
+	</style>
+	<script>
+	(function(){
+		var m=document.getElementById('gc-free-upgrade-modal');
+		if(!m) return;
+		var day=<?php echo (int) $day; ?>;
+		var k='gc_free_upgrade_dismissed_'+day;
+		try{ if(sessionStorage.getItem(k)==='1'){ m.classList.add('is-hidden'); } }catch(e){}
+		var b=document.getElementById('gc-free-modal-close');
+		if(b){ b.addEventListener('click',function(){ m.classList.add('is-hidden'); try{sessionStorage.setItem(k,'1');}catch(e){} }); }
+	})();
+	</script>
+	<?php
+	return ob_get_clean();
+}
+
+
+/**
+ * Free members: challenges yes; tier/premium lessons only after paid upgrade.
+ * During first 30 days they may browse locked tier tabs but content stays locked without payment.
+ * From day 30+, still no tier content until premium.
+ */
+function gc_user_is_free_member( $user_id = 0 ) {
+	$user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+	if ( ! $user_id ) {
+		return false;
+	}
+	if ( user_can( $user_id, 'administrator' ) ) {
+		return false;
+	}
+	if ( function_exists( 'gc_user_is_premium' ) && gc_user_is_premium( $user_id ) ) {
+		return false;
+	}
+	return true;
+}
+
+function gc_free_member_can_access_tier_lessons( $user_id = 0 ) {
+	// Only premium (paid) members access tier lesson content.
+	$user_id = $user_id ? absint( $user_id ) : get_current_user_id();
+	if ( ! $user_id ) {
+		return false;
+	}
+	if ( user_can( $user_id, 'administrator' ) ) {
+		return true;
+	}
+	return function_exists( 'gc_user_is_premium' ) && gc_user_is_premium( $user_id );
+}

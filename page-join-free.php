@@ -1,12 +1,20 @@
 <?php
 /**
- * Template Name: Join Free
+ * Template Name: Join the Movement
  * Dedicated free membership — separate from Academy enlistments.
  */
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 get_header();
+
+$gc_refcode = '';
+if ( ! empty( $_GET['refcode'] ) ) {
+	$gc_refcode = sanitize_text_field( wp_unslash( $_GET['refcode'] ) );
+} elseif ( ! empty( $_GET['ref'] ) ) {
+	$gc_refcode = sanitize_text_field( wp_unslash( $_GET['ref'] ) );
+}
+
 $gc_status = isset( $_GET['gc_free'] ) ? sanitize_key( wp_unslash( $_GET['gc_free'] ) ) : '';
 $login_url = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-login' ) : home_url( '/premium-login/' );
 $ebook_url = function_exists( 'gc_page_url' ) ? gc_page_url( 'free-ebook' ) : home_url( '/free-ebook/' );
@@ -32,7 +40,7 @@ $hub_url   = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard'
 </style>
 <main class="gc-join-free-page">
   <span class="gc-kicker"><?php esc_html_e( 'Free membership', 'game-changers' ); ?></span>
-  <h1><?php esc_html_e( 'Join Free', 'game-changers' ); ?></h1>
+  <h1><?php esc_html_e( 'Join the Movement', 'game-changers' ); ?></h1>
   <p class="lead"><?php esc_html_e( 'Create your free account for the 7-day activation path, 30-day short nuggets, and Member Hub. The same email and password later unlock Premium and Inner Circle — no new login.', 'game-changers' ); ?></p>
 
   <?php if ( 'success' === $gc_status ) : ?>
@@ -54,7 +62,10 @@ $hub_url   = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard'
     <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
       <input type="hidden" name="action" value="gc_submit_join_free">
       <input type="hidden" name="gc_redirect" value="<?php echo esc_url( get_permalink() ); ?>">
-      <?php wp_nonce_field( 'gc_join_free', 'gc_join_free_nonce' ); ?>
+      <?php wp_nonce_field( 'gc_join_free', 'gc_join_free_nonce' );
+    if ( $gc_refcode ) {
+      echo '<input type="hidden" name="gc_refcode" value="' . esc_attr( $gc_refcode ) . '">';
+    } ?>
       <div class="gc-form-row">
         <label for="gc_name"><?php esc_html_e( 'Full Name', 'game-changers' ); ?> *</label>
         <input type="text" id="gc_name" name="gc_name" required autocomplete="name">
@@ -93,7 +104,7 @@ $hub_url   = function_exists( 'gc_page_url' ) ? gc_page_url( 'premium-dashboard'
         </div>
       </div>
       <p style="font-size:13px;color:#66756a;margin:0 0 12px;"><?php esc_html_e( 'This login works for free, Premium, and Inner Circle — you will not create a second account.', 'game-changers' ); ?></p>
-      <button type="submit" class="gc-form-submit"><?php esc_html_e( 'Create free account', 'game-changers' ); ?></button>
+      <button type="submit" class="gc-form-submit"><?php esc_html_e( 'Join the Movement — free', 'game-changers' ); ?></button>
     </form>
   </div>
   <?php endif; ?>

@@ -36,7 +36,7 @@ $default_tiers = array(
 		'name'       => 'Influence Builder',
 		'subtitle'   => 'Become Visible. Become Impactful.',
 		'price'      => 25000,
-		'points'     => '250 GC Points',
+		'points'     => '2,500 GC Points',
 		'alt'        => 'Or invite 5 people to Level 1',
 		'highlights' => array(
 			'Build influence ethically',
@@ -51,7 +51,7 @@ $default_tiers = array(
 		'name'       => 'Impact Architect',
 		'subtitle'   => 'Lead Projects. Lead Communities.',
 		'price'      => 75000,
-		'points'     => '750 GC Points',
+		'points'     => '7,500 GC Points',
 		'alt'        => 'Or invite 3 people to Level 2',
 		'highlights' => array(
 			'Supervised leadership projects',
@@ -275,7 +275,38 @@ $lp_cta_button  = function_exists( 'gc_opt' ) ? gc_opt( 'gc_lp_cta_button', 'Joi
 	</section>
 
 	<!-- AUDIENCE -->
-	<section class="gc-lp-section gc-lp-section--soft">
+	
+<section class="gc-lp-section gc-lp-chapters-sec">
+	<div class="gc-container">
+		<div class="gc-lp-section-head" style="text-align:center;margin-bottom:28px;">
+			<span class="gc-kicker">Grassroots network</span>
+			<h2 style="font-family:'Playfair Display',serif;font-size:clamp(26px,3.5vw,36px);margin:10px 0;">Chapter network</h2>
+			<p style="max-width:560px;margin:0 auto;color:var(--gc-muted,#66756a);font-size:15px;">Every published chapter appears here. New chapters show as soon as they are published in the admin.</p>
+		</div>
+		<?php
+		$gc_lp_chapters = get_posts( array(
+			'post_type'      => 'gc_chapter',
+			'post_status'    => 'publish',
+			'posts_per_page' => 100,
+			'orderby'        => 'title',
+			'order'          => 'ASC',
+		) );
+		?>
+		<div class="gc-lp-chapters" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
+			<?php if ( $gc_lp_chapters ) : foreach ( $gc_lp_chapters as $ch ) : ?>
+				<a href="<?php echo esc_url( get_permalink( $ch ) ); ?>" style="display:block;background:#fff;border:1px solid rgba(13,26,15,.12);border-radius:12px;padding:14px 16px;text-decoration:none;color:inherit;">
+					<strong style="display:block;font-size:15px;"><?php echo esc_html( get_the_title( $ch ) ); ?></strong>
+					<span style="font-size:12px;color:#66756a;"><?php echo esc_html( get_post_meta( $ch->ID, 'gc_chapter_capital', true ) ?: 'Chapter' ); ?></span>
+				</a>
+			<?php endforeach; else : ?>
+				<p style="grid-column:1/-1;text-align:center;color:#66756a;">No chapters published yet.</p>
+			<?php endif; ?>
+		</div>
+		<p style="text-align:center;margin:20px 0 0;font-size:13px;color:#66756a;"><?php echo (int) count( $gc_lp_chapters ); ?> chapter<?php echo count( $gc_lp_chapters ) === 1 ? '' : 's'; ?> live · <a href="<?php echo esc_url( function_exists( 'gc_page_url' ) ? gc_page_url( 'find-a-chapter' ) : home_url( '/find-a-chapter/' ) ); ?>">Find a chapter →</a></p>
+	</div>
+</section>
+
+<section class="gc-lp-section gc-lp-section--soft">
 		<div class="gc-container">
 			<div class="gc-lp-section-head gc-lp-section-head--center">
 				<span class="gc-lp-kicker gc-lp-kicker--green">Who belongs here</span>

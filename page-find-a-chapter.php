@@ -1,5 +1,13 @@
 <?php
-get_header(); $map = function_exists('gc_ng_state_capitals') ? gc_ng_state_capitals() : array(); $state = isset($_GET['gc_state']) ? sanitize_text_field(wp_unslash($_GET['gc_state'])) : ''; $capital = isset($_GET['gc_capital']) ? sanitize_text_field(wp_unslash($_GET['gc_capital'])) : ''; $selected = null; if ($state) { $q = new WP_Query(array('post_type'=>'gc_chapter','post_status'=>'publish','posts_per_page'=>1,'meta_query'=>array(array('key'=>'gc_chapter_state','value'=>$state,'compare'=>'=')))); if ($q->have_posts()) { $q->the_post(); $selected = array('id'=>get_the_ID(),'title'=>get_the_title(),'url'=>get_permalink(),'capital'=>get_post_meta(get_the_ID(),'gc_chapter_capital',true) ?: ($map[$state] ?? ''),'whatsapp'=>get_post_meta(get_the_ID(),'gc_whatsapp_link',true),'organiser'=>get_post_meta(get_the_ID(),'gc_chapter_organiser',true)); wp_reset_postdata(); } } ?>
+get_header(); $map = function_exists('gc_ng_state_capitals') ? gc_ng_state_capitals() : array(); $state = isset($_GET['gc_state']) ? sanitize_text_field(wp_unslash($_GET['gc_state'])) : ''; $capital = isset($_GET['gc_capital']) ? sanitize_text_field(wp_unslash($_GET['gc_capital'])) : ''; $selected = null; if ($state) { $q = new WP_Query(array('post_type'=>'gc_chapter','post_status'=>'publish','posts_per_page'=>5,'meta_query'=>array(array('key'=>'gc_chapter_state','value'=>$state,'compare'=>'='))));
+  if (!$q->have_posts()) {
+    $q = new WP_Query(array('post_type'=>'gc_chapter','post_status'=>'publish','posts_per_page'=>5,'s'=>$state));
+  }
+  if (!$q->have_posts()) {
+    $by_title = get_page_by_title($state, OBJECT, 'gc_chapter');
+    if ($by_title) { $q = new WP_Query(array('post_type'=>'gc_chapter','post_status'=>'publish','p'=>$by_title->ID)); }
+  }
+  if ($q->have_posts()) { $q->the_post(); $selected = array('id'=>get_the_ID(),'title'=>get_the_title(),'url'=>get_permalink(),'capital'=>get_post_meta(get_the_ID(),'gc_chapter_capital',true) ?: ($map[$state] ?? ''),'whatsapp'=>get_post_meta(get_the_ID(),'gc_whatsapp_link',true),'organiser'=>get_post_meta(get_the_ID(),'gc_chapter_organiser',true),'state'=>$state); wp_reset_postdata(); } } ?>
 <main class="gc-interior gc-chapter-finder">
 <section class="gc-page-hero gc-dark"><div class="gc-container"><span class="gc-kicker">Grassroots community</span><h1>Find your <em>chapter.</em></h1><p>Choose your state and capital to connect with the Game Changers community near you.</p></div></section>
 <section class="gc-section"><div class="gc-container gc-narrow-form">

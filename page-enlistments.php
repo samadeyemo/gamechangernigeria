@@ -61,7 +61,7 @@ get_header(); $gc_status = isset( $_GET['gc_enlist'] ) ? sanitize_key( wp_unslas
     <div class="section-label"><?php esc_html_e( 'Free Enlistment', 'game-changers' ); ?></div>
     <h1><?php the_title(); ?></h1>
     <div class="gc-enl-intro">
-      <p><?php echo esc_html( gc_opt( 'gc_enlist_intro', "This path is for members who already hold a Premium tier (Tier 1, 2, or higher). Verify the email on your Premium account. Free members should use Join Free instead." ) ); ?></p>
+      <p><?php echo esc_html( gc_opt( 'gc_enlist_intro', "This path is for members who already hold a Premium tier (Tier 1, 2, or higher). Verify the email on your Premium account. Free members should use Join the Movement instead." ) ); ?></p>
     </div>
   </div>
   <div class="gc-enl-steps">
@@ -83,8 +83,8 @@ get_header(); $gc_status = isset( $_GET['gc_enlist'] ) ? sanitize_key( wp_unslas
     </div>
   <?php elseif ( 'notpremium' === $gc_status ) : ?>
     <div class="gc-form-notice gc-form-notice--err" style="max-width:640px;margin:0 auto 20px;">
-      <?php esc_html_e( 'That email is not an active Premium tier member (Tier 1+). Join Free or complete a Premium tier first, then return here.', 'game-changers' ); ?>
-      <p style="margin:10px 0 0;"><a href="<?php echo esc_url( function_exists( 'gc_page_url' ) ? gc_page_url( 'join-free' ) : home_url( '/join-free/' ) ); ?>">Join Free</a>
+      <?php esc_html_e( 'That email is not an active Premium tier member (Tier 1+). Join the Movement or complete a Premium tier first, then return here.', 'game-changers' ); ?>
+      <p style="margin:10px 0 0;"><a href="<?php echo esc_url( function_exists( 'gc_page_url' ) ? gc_page_url( 'join-free' ) : home_url( '/inner-circle/' ) ); ?>">Join the Movement</a>
       · <a href="<?php echo esc_url( function_exists( 'gc_page_url' ) ? gc_page_url( 'become-a-member' ) : home_url( '/become-a-member/' ) ); ?>">Go Premium</a></p>
     </div>
   <?php elseif ( 'duplicate_bank' === $gc_status ) : ?>
@@ -95,7 +95,7 @@ get_header(); $gc_status = isset( $_GET['gc_enlist'] ) ? sanitize_key( wp_unslas
   <div class="gc-form-card">
     <div class="gc-premium-enlist-note" style="background:rgba(0,107,63,.06);border:1px solid rgba(0,107,63,.15);border-radius:10px;padding:12px 14px;margin-bottom:18px;font-size:13px;line-height:1.55;color:#0d1a0f;">
       <strong>Premium members only.</strong> Enter the same email you used for Tier 1, 2, or any higher plan. Free accounts cannot enlist here —
-      <a href="<?php echo esc_url( function_exists( 'gc_page_url' ) ? gc_page_url( 'join-free' ) : home_url( '/join-free/' ) ); ?>">Join Free</a> instead.
+      <a href="<?php echo esc_url( function_exists( 'gc_page_url' ) ? gc_page_url( 'join-free' ) : home_url( '/inner-circle/' ) ); ?>">Join the Movement</a> instead.
     </div>
 
     <h2 class="gc-form-heading"><?php esc_html_e( 'Premium member enlistment', 'game-changers' ); ?></h2>
